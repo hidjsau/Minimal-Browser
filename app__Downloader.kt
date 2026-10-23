@@ -24,6 +24,8 @@ class Downloader(context: Context) {
         val cookies: String?,
         /** Already-fetched bytes (blob:/data: downloads). When set, nothing is downloaded. */
         val localFile: java.io.File? = null,
+        /** Name was chosen by the user in the rename dialog: never replace it. */
+        val userNamed: Boolean = false,
     )
 
     private val app = context.applicationContext
@@ -68,7 +70,7 @@ class Downloader(context: Context) {
                 if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode}")
                 // Real name comes from the final response (redirects, signed URLs).
                 val cd = conn.getHeaderField("Content-Disposition")
-                if (cd != null || req.fileName.endsWith(".bin")) {
+                if (!req.userNamed && (cd != null || req.fileName.endsWith(".bin"))) {
                     finalName = android.webkit.URLUtil.guessFileName(
                         conn.url.toString(), cd, conn.contentType?.substringBefore(';')
                     )
@@ -76,6 +78,7 @@ class Downloader(context: Context) {
                 input = conn.inputStream
                 total = conn.contentLengthLong
             }
+            finalName = uniqueName(tree, finalName)
             // octet-stream keeps the exact name; the folder provider adds " (1)" if the name exists.
             target = DocumentsContract.createDocument(
                 app.contentResolver, parent, "application/octet-stream", finalName
@@ -108,6 +111,26 @@ class Downloader(context: Context) {
         } finally {
             req.localFile?.delete()
         }
+    }
+
+    /** "xyz.mp4" exists -> "xyz(1).mp4": the number goes before the last dot, never after the extension. */
+    private fun uniqueName(tree: Uri, name: String): String {
+        val existing = HashSet<String>()
+        runCatching {
+            val kids = DocumentsContract.buildChildDocumentsUriUsingTree(
+                tree, DocumentsContract.getTreeDocumentId(tree)
+            )
+            app.contentResolver.query(
+                kids, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null
+            )?.use { c -> while (c.moveToNext()) c.getString(0)?.let { existing.add(it) } }
+        }
+        if (name !in existing) return name
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while ("$base($i)$ext" in existing) i++
+        return "$base($i)$ext"
     }
 
     /** progress: 0..100, or -1 for indeterminate. done = final state (not ongoing). */

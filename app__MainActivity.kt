@@ -209,7 +209,78 @@ class MainActivity : Activity() {
         java.io.File(cacheDir, "dl-${System.nanoTime()}.tmp").also { it.writeBytes(bytes) }
     }.getOrNull()
 
+    /** Rename dialog first; the folder picker opens only after the user taps Download. */
     private fun askFolder(req: Downloader.Request) {
+        val dp = resources.displayMetrics.density
+        fun px(v: Int) = (v * dp).toInt()
+        val dot = req.fileName.lastIndexOf('.')
+        val baseName = if (dot > 0) req.fileName.substring(0, dot) else req.fileName
+        val extName = if (dot > 0) req.fileName.substring(dot + 1) else ""
+
+        val nameField = EditText(this).apply {
+            setSingleLine(true); hint = "File name"; setText(baseName)
+        }
+        val extField = EditText(this).apply {
+            setSingleLine(true); hint = "ext"; setText(extName)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        var active: EditText = nameField
+        nameField.setOnFocusChangeListener { _, f -> if (f) active = nameField }
+        extField.setOnFocusChangeListener { _, f -> if (f) active = extField }
+
+        fun tool(label: String, action: () -> Unit) = android.widget.Button(this).apply {
+            text = label; isAllCaps = false; isFocusable = false; isFocusableInTouchMode = false
+            setOnClickListener { action() }
+        }
+        val tools = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(tool("◀") { active.setSelection((active.selectionEnd - 1).coerceAtLeast(0)) })
+            addView(tool("▶") { active.setSelection((active.selectionEnd + 1).coerceAtMost(active.length())) })
+            addView(tool("Select all") { active.selectAll() })
+        }
+        val extRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(TextView(context).apply { text = "Extension  ."; textSize = 14f })
+            addView(extField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(20), px(8), px(20), 0)
+            addView(nameField)
+            addView(extRow)
+            addView(tools)
+        }
+
+        var confirmed = false
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Save file as")
+            .setView(box)
+            .setPositiveButton("Download") { _, _ ->
+                confirmed = true
+                val n = nameField.text.toString().replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+                val e = extField.text.toString().trim().trimStart('.').replace(Regex("[\\\\/:*?\"<>|\\s]"), "")
+                val full = (if (n.isEmpty()) "download" else n) + (if (e.isEmpty()) "" else ".$e")
+                continueToFolder(
+                    Downloader.Request(
+                        url = req.url, fileName = full, userAgent = req.userAgent,
+                        referer = req.referer, cookies = req.cookies,
+                        localFile = req.localFile, userNamed = true,
+                    )
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .setOnDismissListener {
+                if (!confirmed) { busy = false; req.localFile?.delete() }
+            }
+            .create()
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        nameField.requestFocus()
+        nameField.setSelection(nameField.length()) // cursor at the end of the name
+    }
+
+    private fun continueToFolder(req: Downloader.Request) {
         pendingDownload = req
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             // Ask once; the folder picker opens right after the answer.
