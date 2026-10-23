@@ -22,12 +22,12 @@ import android.widget.TextView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 
-/** Step 1: one screen, one WebView, an address bar and a progress bar. Nothing else. */
+/** Step 1: one screen, one WebView, an address bar and a progressBar bar. Nothing else. */
 class MainActivity : Activity() {
 
     private lateinit var webView: WebView
     private lateinit var addressBar: EditText
-    private lateinit var progress: ProgressBar
+    private lateinit var progressBar: ProgressBar
 
     private val backCallback = OnBackInvokedCallback {
         if (webView.canGoBack()) webView.goBack() else finish()
@@ -60,7 +60,7 @@ class MainActivity : Activity() {
             }
         }
 
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             visibility = android.view.View.GONE
         }
@@ -76,8 +76,8 @@ class MainActivity : Activity() {
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
-                    progress.progress = newProgress
-                    progress.visibility =
+                    progressBar.progress = newProgress
+                    progressBar.visibility =
                         if (newProgress in 1..99) android.view.View.VISIBLE else android.view.View.GONE
                 }
             }
@@ -93,7 +93,7 @@ class MainActivity : Activity() {
         }
 
         root.addView(addressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(progress, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
+        root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
