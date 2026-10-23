@@ -150,12 +150,19 @@ class MainActivity : Activity() {
             url.startsWith("blob:") && page != null -> {
                 busy = true
                 downloader.toast("Preparing download…")
-                BlobFetcher(this).fetch(
-                    blobUrl = url,
-                    pageUrl = page,
-                    onDone = { file, type -> stagedFile(url, disposition, type ?: mime, file) },
-                    onFail = { busy = false; downloader.toast("Download failed: $it") },
-                )
+                // Real name = the page link's download="..." attribute (a blob URL has no name).
+                webView.evaluateJavascript(
+                    "(Array.from(document.querySelectorAll('a[download]')).find(a=>a.href===" +
+                        org.json.JSONObject.quote(url) + ")||{}).download||''"
+                ) { raw ->
+                    val pageName = raw?.trim('"')?.takeIf { it.isNotBlank() && it != "null" }
+                    BlobFetcher(this).fetch(
+                        blobUrl = url,
+                        pageUrl = page,
+                        onDone = { file, type -> stagedFile(url, disposition, type ?: mime, file, pageName) },
+                        onFail = { busy = false; downloader.toast("Download failed: $it") },
+                    )
+                }
             }
             url.startsWith("data:") -> {
                 busy = true
@@ -177,11 +184,11 @@ class MainActivity : Activity() {
     }
 
     /** Blob/data bytes are already in a temp file; now only the folder is missing. */
-    private fun stagedFile(url: String, disposition: String?, mime: String?, file: java.io.File) {
+    private fun stagedFile(url: String, disposition: String?, mime: String?, file: java.io.File, pageName: String? = null) {
         askFolder(
             Downloader.Request(
                 url = url,
-                fileName = URLUtil.guessFileName(url, disposition, mime),
+                fileName = pageName ?: URLUtil.guessFileName(url, disposition, mime),
                 userAgent = null, referer = null, cookies = null,
                 localFile = file,
             )

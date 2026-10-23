@@ -50,13 +50,9 @@ class Downloader(context: Context) {
             val parent = DocumentsContract.buildDocumentUriUsingTree(
                 tree, DocumentsContract.getTreeDocumentId(tree)
             )
-            // octet-stream keeps the exact name; the folder provider adds " (1)" if the name exists.
-            target = DocumentsContract.createDocument(
-                app.contentResolver, parent, "application/octet-stream", req.fileName
-            ) ?: error("Could not create file in folder")
-
             val input: java.io.InputStream
             val total: Long
+            var finalName = req.fileName
             if (req.localFile != null) {
                 input = java.io.FileInputStream(req.localFile)
                 total = req.localFile.length()
@@ -70,9 +66,20 @@ class Downloader(context: Context) {
                     req.referer?.let { setRequestProperty("Referer", it) }
                 }
                 if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode}")
+                // Real name comes from the final response (redirects, signed URLs).
+                val cd = conn.getHeaderField("Content-Disposition")
+                if (cd != null || req.fileName.endsWith(".bin")) {
+                    finalName = android.webkit.URLUtil.guessFileName(
+                        conn.url.toString(), cd, conn.contentType?.substringBefore(';')
+                    )
+                }
                 input = conn.inputStream
                 total = conn.contentLengthLong
             }
+            // octet-stream keeps the exact name; the folder provider adds " (1)" if the name exists.
+            target = DocumentsContract.createDocument(
+                app.contentResolver, parent, "application/octet-stream", finalName
+            ) ?: error("Could not create file in folder")
             var done = 0L
             var lastPct = -1
 
@@ -94,7 +101,7 @@ class Downloader(context: Context) {
                     }
                 }
             }
-            post(id, req.fileName, "Download complete", done = true)
+            post(id, finalName, "Download complete", done = true)
         } catch (e: Exception) {
             target?.let { runCatching { DocumentsContract.deleteDocument(app.contentResolver, it) } }
             post(id, req.fileName, "Download failed: ${e.message ?: "error"}", done = true, failed = true)
