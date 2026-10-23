@@ -6,7 +6,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 /** id is the stable storage key (never reused); name is only a label, so renaming keeps logins. */
-data class Profile(val id: String, val name: String)
+data class Profile(val id: String, val name: String, val emoji: String)
 
 /** Profile list + active profile + last page per profile, kept in SharedPreferences. */
 class ProfileList(context: Context) {
@@ -21,11 +21,11 @@ class ProfileList(context: Context) {
             val arr = JSONArray(prefs.getString(KEY_LIST, "[]"))
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                profiles.add(Profile(o.getString("id"), o.getString("name")))
+                profiles.add(Profile(o.getString("id"), o.getString("name"), o.optString("emoji", EMOJIS[0])))
             }
         }
         if (profiles.isEmpty()) {
-            profiles.add(newProfile("Main"))
+            profiles.add(newProfile("Main", EMOJIS[0]))
             save()
         }
         activeId = prefs.getString(KEY_ACTIVE, null)?.takeIf { id -> profiles.any { it.id == id } }
@@ -34,8 +34,8 @@ class ProfileList(context: Context) {
 
     fun active(): Profile = profiles.first { it.id == activeId }
 
-    fun add(name: String): Profile {
-        val p = newProfile(name)
+    fun add(name: String, emoji: String): Profile {
+        val p = newProfile(name, emoji)
         profiles.add(p)
         save()
         return p
@@ -44,6 +44,11 @@ class ProfileList(context: Context) {
     fun rename(id: String, name: String) {
         val i = profiles.indexOfFirst { it.id == id }
         if (i >= 0) { profiles[i] = profiles[i].copy(name = name); save() }
+    }
+
+    fun setEmoji(id: String, emoji: String) {
+        val i = profiles.indexOfFirst { it.id == id }
+        if (i >= 0) { profiles[i] = profiles[i].copy(emoji = emoji); save() }
     }
 
     fun remove(id: String) {
@@ -61,17 +66,21 @@ class ProfileList(context: Context) {
     fun lastUrl(id: String): String? = prefs.getString(KEY_URL + id, null)
     fun saveUrl(id: String, url: String) = prefs.edit().putString(KEY_URL + id, url).apply()
 
-    private fun newProfile(name: String) =
-        Profile("p" + UUID.randomUUID().toString().replace("-", "").take(12), name)
+    private fun newProfile(name: String, emoji: String) =
+        Profile("p" + UUID.randomUUID().toString().replace("-", "").take(12), name, emoji)
 
     private fun save() {
         val arr = JSONArray()
-        profiles.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name)) }
+        profiles.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name).put("emoji", it.emoji)) }
         prefs.edit().putString(KEY_LIST, arr.toString()).putString(KEY_ACTIVE, activeId).apply()
     }
 
     companion object {
         const val MAX_PROFILES = 20
+        val EMOJIS = listOf(
+            "😀", "😎", "🦊", "🐼", "🚀", "🌟", "🍀", "🔥", "🎯", "💼", "🏠", "🎮",
+            "📚", "🎨", "🌈", "🐱", "☕", "🎵", "⚽", "✈️", "🍕", "💡", "🔒", "🛒",
+        )
         private const val KEY_LIST = "list"
         private const val KEY_ACTIVE = "active"
         private const val KEY_URL = "url_"
