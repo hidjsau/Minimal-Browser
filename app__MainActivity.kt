@@ -86,6 +86,10 @@ class MainActivity : Activity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                     if (!addressBar.hasFocus()) addressBar.setText(url)
+                    view.evaluateJavascript(NAME_HOOK, null)
+                }
+                override fun onPageFinished(view: WebView, url: String?) {
+                    view.evaluateJavascript(NAME_HOOK, null)
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -152,8 +156,8 @@ class MainActivity : Activity() {
                 downloader.toast("Preparing download…")
                 // Real name = the page link's download="..." attribute (a blob URL has no name).
                 webView.evaluateJavascript(
-                    "(Array.from(document.querySelectorAll('a[download]')).find(a=>a.href===" +
-                        org.json.JSONObject.quote(url) + ")||{}).download||''"
+                    "(function(){var n=window.__dlNames||{};var u=" + org.json.JSONObject.quote(url) +
+                        ";if(n[u])return n[u];if(window.__dlLast&&Date.now()-window.__dlLastT<20000)return window.__dlLast;return '';})()"
                 ) { raw ->
                     val pageName = raw?.trim('"')?.takeIf { it.isNotBlank() && it != "null" }
                     BlobFetcher(this).fetch(
@@ -238,6 +242,30 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_FOLDER = 1
         const val REQ_NOTIFY = 2
+        /** Remembers download="name" of page-generated (blob) links, even if the link is removed later. */
+        const val NAME_HOOK = """
+(function(){
+  if (window.__dlHook) return; window.__dlHook = true;
+  var names = window.__dlNames = {};
+  function rec(a){
+    try {
+      if (a && a.download && a.href && a.href.indexOf('blob:') === 0) {
+        names[a.href] = a.download; window.__dlLast = a.download; window.__dlLastT = Date.now();
+      }
+    } catch (e) {}
+  }
+  var oc = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function(){ rec(this); return oc.apply(this, arguments); };
+  var od = EventTarget.prototype.dispatchEvent;
+  EventTarget.prototype.dispatchEvent = function(ev){
+    if (this instanceof HTMLAnchorElement && ev && ev.type === 'click') rec(this);
+    return od.apply(this, arguments);
+  };
+  document.addEventListener('click', function(e){
+    var t = e.target; rec(t && t.closest ? t.closest('a[download]') : null);
+  }, true);
+})();
+"""
     }
 
     private fun toUrl(input: String): String {
