@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * page's own origin, fetch()es the blob there and hands the bytes back in base64 chunks.
  * Call fetch() on the main thread. Callbacks run on the main thread.
  */
-class BlobFetcher(private val context: Context) {
+class BlobFetcher(private val context: Context, private val profileId: String? = null) {
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -33,6 +33,8 @@ class BlobFetcher(private val context: Context) {
         val file = File(context.cacheDir, "dl-${System.nanoTime()}.tmp")
         val finished = AtomicBoolean(false)
         val helper = WebView(context)
+        // Same profile as the tab, or the blob would be read from the wrong storage.
+        profileId?.let { runCatching { androidx.webkit.WebViewCompat.setProfile(helper, it) } }
         var mime: String? = null
         var out: FileOutputStream? = null
         lateinit var timeout: Runnable

@@ -6,6 +6,17 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.webkit.CookieManager
+import androidx.webkit.ProfileStore
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.webkit.URLUtil
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -30,30 +41,58 @@ import android.window.OnBackInvokedDispatcher
 /** Step 1: one screen, one WebView, an address bar and a progressBar bar. Nothing else. */
 class MainActivity : Activity() {
 
-    private lateinit var webView: WebView
+    private lateinit var webView: WebView            // the active profile's WebView
     private lateinit var addressBar: EditText
     private lateinit var progressBar: ProgressBar
+    private lateinit var container: FrameLayout
+    private lateinit var profileBar: HorizontalScrollView
+    private lateinit var chipRow: LinearLayout
+
+    private lateinit var profiles: ProfileList
+    private val views = HashMap<String, WebView>()   // profile id -> its WebView
 
     private lateinit var downloader: Downloader
     private var pendingDownload: Downloader.Request? = null
     private var busy = false
 
     private val backCallback = OnBackInvokedCallback {
-        if (webView.canGoBack()) webView.goBack() else finish()
+        if (profileBar.visibility == View.VISIBLE) profileBar.visibility = View.GONE
+        else if (webView.canGoBack()) webView.goBack() else finish()
     }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         downloader = Downloader(this)
         cacheDir.listFiles()?.filter { it.name.startsWith("dl-") }?.forEach { it.delete() } // leftovers
-        val density = resources.displayMetrics.density
-        fun dp(v: Int) = (v * density).toInt()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
         }
+        // targetSdk 36 draws edge-to-edge, so keep content clear of system bars and keyboard.
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsets.CONSUMED
+        }
+        setContentView(root)
+
+        // Every profile needs its own storage. Never fall back to shared storage.
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            root.addView(TextView(this).apply {
+                text = "This phone's Android System WebView does not support separate profiles.\n\n" +
+                    "Update \"Android System WebView\" (or Chrome) from the Play Store and open the app again."
+                textSize = 16f
+                setPadding(dp(24), dp(48), dp(24), dp(24))
+            })
+            return
+        }
+
+        profiles = ProfileList(this)
+        removeOrphanStorage()
 
         addressBar = EditText(this).apply {
             setSingleLine(true)
@@ -70,36 +109,38 @@ class MainActivity : Activity() {
                 } else false
             }
         }
+        val profileBtn = TextView(this).apply {
+            text = "\uD83D\uDC64"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                profileBar.visibility = if (profileBar.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                if (profileBar.visibility == View.VISIBLE) refreshChips()
+            }
+        }
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(profileBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+
+        chipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        profileBar = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            visibility = View.GONE
+            setBackgroundColor(0xFFF6F6F4.toInt())
+            addView(chipRow)
+        }
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
-            visibility = android.view.View.GONE
+            visibility = View.GONE
         }
-
-        webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                onDownloadRequested(url, userAgent, contentDisposition, mimeType)
-            }
-            webViewClient = object : WebViewClient() {
-                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                    if (!addressBar.hasFocus()) addressBar.setText(url)
-                    view.evaluateJavascript(NAME_HOOK, null)
-                }
-                override fun onPageFinished(view: WebView, url: String?) {
-                    view.evaluateJavascript(NAME_HOOK, null)
-                }
-            }
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView, newProgress: Int) {
-                    progressBar.progress = newProgress
-                    progressBar.visibility =
-                        if (newProgress in 1..99) android.view.View.VISIBLE else android.view.View.GONE
-                }
-            }
-        }
+        container = FrameLayout(this)
 
         val status = TextView(this).apply {
             textSize = 11f
@@ -110,34 +151,176 @@ class MainActivity : Activity() {
             else "System WebView: not found"
         }
 
-        root.addView(addressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(topRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(profileBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
-        root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        // targetSdk 36 draws edge-to-edge, so keep content clear of system bars and keyboard.
-        root.setOnApplyWindowInsetsListener { v, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            WindowInsets.CONSUMED
-        }
-
-        setContentView(root)
         onBackInvokedDispatcher.registerOnBackInvokedCallback(
             OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback
         )
+        WebView.setWebContentsDebuggingEnabled(true) // diagnostics only
+        showProfile(profiles.activeId)
+    }
 
-        WebView.setWebContentsDebuggingEnabled(true) // step-1 diagnostics only
-        webView.loadUrl("https://example.com")
+    // ---- profiles -------------------------------------------------------------------------
+
+    /** Storage of profiles that are no longer in our list (e.g. a delete that was interrupted). */
+    private fun removeOrphanStorage() = runCatching {
+        val store = ProfileStore.getInstance()
+        val known = profiles.profiles.map { it.id }.toSet()
+        store.allProfileNames
+            .filter { it != Profile_DEFAULT && it !in known }
+            .forEach { runCatching { store.deleteProfile(it) } }
+    }
+
+    private fun createWebView(profile: Profile): WebView {
+        ProfileStore.getInstance().getOrCreateProfile(profile.id)
+        return WebView(this).apply {
+            WebViewCompat.setProfile(this, profile.id) // first call: before any loading
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            val self = this
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                onDownloadRequested(self, profile.id, url, userAgent, contentDisposition, mimeType)
+            }
+            webViewClient = object : WebViewClient() {
+                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                    if (view === webView && !addressBar.hasFocus()) addressBar.setText(url)
+                    view.evaluateJavascript(NAME_HOOK, null)
+                }
+                override fun onPageFinished(view: WebView, url: String?) {
+                    view.evaluateJavascript(NAME_HOOK, null)
+                    if (url != null && url != "about:blank") profiles.saveUrl(profile.id, url)
+                }
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    if (view !== webView) return
+                    progressBar.progress = newProgress
+                    progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
+                }
+            }
+        }
+    }
+
+    /** Puts the profile's WebView on screen (each profile keeps its own page while hidden). */
+    private fun showProfile(id: String) {
+        if (::webView.isInitialized) webView.onPause()
+        profiles.setActive(id)
+        val profile = profiles.active()
+        val v = views.getOrPut(id) { createWebView(profile) }
+        container.removeAllViews()
+        container.addView(v, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        v.onResume()
+        webView = v
+        progressBar.visibility = View.GONE
+        if (v.url == null) v.loadUrl(profiles.lastUrl(id) ?: HOME) else addressBar.setText(v.url)
+        refreshChips()
+    }
+
+    private fun chip(label: String, active: Boolean) = TextView(this).apply {
+        text = label
+        textSize = 15f
+        setTextColor(0xFF1B1B1B.toInt())
+        setPadding(dp(16), dp(9), dp(16), dp(9))
+        background = GradientDrawable().apply {
+            cornerRadius = dp(100).toFloat()
+            setColor(if (active) 0xFFB7F0BE.toInt() else 0xFFE6E9E0.toInt())
+        }
+    }
+
+    private fun refreshChips() {
+        chipRow.removeAllViews()
+        for (p in profiles.profiles) {
+            val c = chip(p.name, p.id == profiles.activeId).apply {
+                setOnClickListener {
+                    profileBar.visibility = View.GONE
+                    if (p.id != profiles.activeId) showProfile(p.id)
+                }
+                setOnLongClickListener { profileActions(p); true }
+            }
+            chipRow.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+        }
+        chipRow.addView(chip("+", false).apply {
+            textSize = 20f
+            setOnClickListener { addProfileDialog() }
+        })
+    }
+
+    private fun nameDialog(title: String, initial: String, onOk: (String) -> Unit) {
+        val input = EditText(this).apply { setSingleLine(true); setText(initial); setSelection(length()) }
+        val box = FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input) }
+        val d = android.app.AlertDialog.Builder(this)
+            .setTitle(title).setView(box)
+            .setPositiveButton("OK") { _, _ ->
+                val n = input.text.toString().trim()
+                if (n.isNotEmpty()) onOk(n)
+            }
+            .setNegativeButton("Cancel", null).create()
+        d.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        d.show()
+        input.requestFocus()
+    }
+
+    private fun addProfileDialog() {
+        if (profiles.profiles.size >= ProfileList.MAX_PROFILES) {
+            downloader.toast("Profile limit reached (${ProfileList.MAX_PROFILES})"); return
+        }
+        nameDialog("New profile", "") { n ->
+            val p = profiles.add(n)
+            profileBar.visibility = View.GONE
+            showProfile(p.id)
+        }
+    }
+
+    private fun profileActions(p: Profile) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(p.name)
+            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+                if (which == 0) nameDialog("Rename profile", p.name) { n -> profiles.rename(p.id, n); refreshChips() }
+                else confirmDelete(p)
+            }.show()
+    }
+
+    private fun confirmDelete(p: Profile) {
+        if (profiles.profiles.size <= 1) { downloader.toast("Keep at least one profile"); return }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete \"${p.name}\"?")
+            .setMessage("Its logins and site data will be erased. Other profiles are not touched.")
+            .setPositiveButton("Delete") { _, _ -> deleteProfile(p) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun deleteProfile(p: Profile) {
+        // 1) leave the profile if it is on screen, 2) destroy its WebView, 3) erase its storage.
+        val wasActive = p.id == profiles.activeId
+        views.remove(p.id)?.let { v ->
+            (v.parent as? ViewGroup)?.removeView(v)
+            v.destroy()
+        }
+        profiles.remove(p.id)
+        if (wasActive) showProfile(profiles.activeId) else refreshChips()
+        deleteStorage(p.id, 0)
+    }
+
+    /** The store refuses to delete a profile that is still in use, so retry shortly. */
+    private fun deleteStorage(id: String, attempt: Int) {
+        val ok = runCatching { ProfileStore.getInstance().deleteProfile(id) }.isSuccess
+        if (!ok && attempt < 5) {
+            Handler(Looper.getMainLooper()).postDelayed({ deleteStorage(id, attempt + 1) }, 500)
+        } // anything left is removed at next start by removeOrphanStorage()
     }
 
     /** Every download: get the bytes (blob/data are fetched right away), then ask for a folder. */
-    private fun onDownloadRequested(url: String, ua: String?, disposition: String?, mime: String?) {
+    private fun onDownloadRequested(view: WebView, profileId: String, url: String, ua: String?, disposition: String?, mime: String?) {
         if (busy) {
             downloader.toast("Finish the current download first")
             return
         }
-        val page = webView.url
+        val page = view.url
         when {
             url.startsWith("http://") || url.startsWith("https://") -> {
                 busy = true
@@ -147,7 +330,7 @@ class MainActivity : Activity() {
                         fileName = URLUtil.guessFileName(url, disposition, mime),
                         userAgent = ua,
                         referer = page,
-                        cookies = CookieManager.getInstance().getCookie(url),
+                        cookies = (ProfileStore.getInstance().getProfile(profileId)?.cookieManager ?: CookieManager.getInstance()).getCookie(url),
                     )
                 )
             }
@@ -155,12 +338,12 @@ class MainActivity : Activity() {
                 busy = true
                 downloader.toast("Preparing download…")
                 // Real name = the page link's download="..." attribute (a blob URL has no name).
-                webView.evaluateJavascript(
+                view.evaluateJavascript(
                     "(function(){var n=window.__dlNames||{};var u=" + org.json.JSONObject.quote(url) +
                         ";if(n[u])return n[u];if(window.__dlLast&&Date.now()-window.__dlLastT<20000)return window.__dlLast;return '';})()"
                 ) { raw ->
                     val pageName = raw?.trim('"')?.takeIf { it.isNotBlank() && it != "null" }
-                    BlobFetcher(this).fetch(
+                    BlobFetcher(this, profileId).fetch(
                         blobUrl = url,
                         pageUrl = page,
                         onDone = { file, type -> stagedFile(url, disposition, type ?: mime, file, pageName) },
@@ -313,6 +496,8 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_FOLDER = 1
         const val REQ_NOTIFY = 2
+        const val HOME = "https://www.google.com"
+        const val Profile_DEFAULT = "Default"
         /** Remembers download="name" of page-generated (blob) links, even if the link is removed later. */
         const val NAME_HOOK = """
 (function(){
@@ -350,9 +535,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCallback)
-        (webView.parent as? ViewGroup)?.removeView(webView)
-        webView.destroy()
+        if (::profiles.isInitialized) onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCallback)
+        views.values.forEach { v -> (v.parent as? ViewGroup)?.removeView(v); v.destroy() }
+        views.clear()
         super.onDestroy()
     }
 }
