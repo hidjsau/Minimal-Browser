@@ -36,6 +36,7 @@ class MainActivity : Activity() {
 
     private lateinit var downloader: Downloader
     private var pendingDownload: Downloader.Request? = null
+    private var busy = false
 
     private val backCallback = OnBackInvokedCallback {
         if (webView.canGoBack()) webView.goBack() else finish()
@@ -45,6 +46,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         downloader = Downloader(this)
+        cacheDir.listFiles()?.filter { it.name.startsWith("dl-") }?.forEach { it.delete() } // leftovers
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
@@ -125,23 +127,79 @@ class MainActivity : Activity() {
         webView.loadUrl("https://example.com")
     }
 
-    /** Every download: ask for a folder, then save into it. */
+    /** Every download: get the bytes (blob/data are fetched right away), then ask for a folder. */
     private fun onDownloadRequested(url: String, ua: String?, disposition: String?, mime: String?) {
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            downloader.toast("This download type is not supported yet")
+        if (busy) {
+            downloader.toast("Finish the current download first")
             return
         }
-        if (pendingDownload != null) {
-            downloader.toast("Choose a folder for the current download first")
-            return
+        val page = webView.url
+        when {
+            url.startsWith("http://") || url.startsWith("https://") -> {
+                busy = true
+                askFolder(
+                    Downloader.Request(
+                        url = url,
+                        fileName = URLUtil.guessFileName(url, disposition, mime),
+                        userAgent = ua,
+                        referer = page,
+                        cookies = CookieManager.getInstance().getCookie(url),
+                    )
+                )
+            }
+            url.startsWith("blob:") && page != null -> {
+                busy = true
+                downloader.toast("Preparing download…")
+                BlobFetcher(this).fetch(
+                    blobUrl = url,
+                    pageUrl = page,
+                    onDone = { file, type -> stagedFile(url, disposition, type ?: mime, file) },
+                    onFail = { busy = false; downloader.toast("Download failed: $it") },
+                )
+            }
+            url.startsWith("data:") -> {
+                busy = true
+                Thread {
+                    val file = decodeDataUrl(url)
+                    runOnUiThread {
+                        if (file == null) {
+                            busy = false
+                            downloader.toast("Download failed: bad data URL")
+                        } else {
+                            val type = url.substring(5).substringBefore(',').substringBefore(';')
+                            stagedFile(url, disposition, type.ifBlank { mime }, file)
+                        }
+                    }
+                }.start()
+            }
+            else -> downloader.toast("This download type is not supported yet")
         }
-        pendingDownload = Downloader.Request(
-            url = url,
-            fileName = URLUtil.guessFileName(url, disposition, mime),
-            userAgent = ua,
-            referer = webView.url,
-            cookies = CookieManager.getInstance().getCookie(url),
+    }
+
+    /** Blob/data bytes are already in a temp file; now only the folder is missing. */
+    private fun stagedFile(url: String, disposition: String?, mime: String?, file: java.io.File) {
+        askFolder(
+            Downloader.Request(
+                url = url,
+                fileName = URLUtil.guessFileName(url, disposition, mime),
+                userAgent = null, referer = null, cookies = null,
+                localFile = file,
+            )
         )
+    }
+
+    private fun decodeDataUrl(url: String): java.io.File? = runCatching {
+        val comma = url.indexOf(',')
+        val header = url.substring(5, comma)
+        val payload = url.substring(comma + 1)
+        val bytes = if (header.endsWith(";base64")) {
+            android.util.Base64.decode(Uri.decode(payload), android.util.Base64.DEFAULT)
+        } else Uri.decode(payload).toByteArray()
+        java.io.File(cacheDir, "dl-${System.nanoTime()}.tmp").also { it.writeBytes(bytes) }
+    }.getOrNull()
+
+    private fun askFolder(req: Downloader.Request) {
+        pendingDownload = req
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             // Ask once; the folder picker opens right after the answer.
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
@@ -164,8 +222,10 @@ class MainActivity : Activity() {
         if (requestCode != REQ_FOLDER) return
         val req = pendingDownload
         pendingDownload = null
+        busy = false
         val tree = data?.data
         if (resultCode == RESULT_OK && tree != null && req != null) downloader.start(req, tree)
+        else req?.localFile?.delete() // picker cancelled
     }
 
     private companion object {

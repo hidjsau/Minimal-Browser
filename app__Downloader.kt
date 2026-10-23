@@ -22,6 +22,8 @@ class Downloader(context: Context) {
         val userAgent: String?,
         val referer: String?,
         val cookies: String?,
+        /** Already-fetched bytes (blob:/data: downloads). When set, nothing is downloaded. */
+        val localFile: java.io.File? = null,
     )
 
     private val app = context.applicationContext
@@ -53,20 +55,28 @@ class Downloader(context: Context) {
                 app.contentResolver, parent, "application/octet-stream", req.fileName
             ) ?: error("Could not create file in folder")
 
-            val conn = (URL(req.url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 20_000
-                readTimeout = 30_000
-                instanceFollowRedirects = true
-                req.userAgent?.let { setRequestProperty("User-Agent", it) }
-                req.cookies?.let { setRequestProperty("Cookie", it) }
-                req.referer?.let { setRequestProperty("Referer", it) }
+            val input: java.io.InputStream
+            val total: Long
+            if (req.localFile != null) {
+                input = java.io.FileInputStream(req.localFile)
+                total = req.localFile.length()
+            } else {
+                val conn = (URL(req.url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 20_000
+                    readTimeout = 30_000
+                    instanceFollowRedirects = true
+                    req.userAgent?.let { setRequestProperty("User-Agent", it) }
+                    req.cookies?.let { setRequestProperty("Cookie", it) }
+                    req.referer?.let { setRequestProperty("Referer", it) }
+                }
+                if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode}")
+                input = conn.inputStream
+                total = conn.contentLengthLong
             }
-            if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode}")
-            val total = conn.contentLengthLong
             var done = 0L
             var lastPct = -1
 
-            conn.inputStream.use { input ->
+            input.use { input ->
                 app.contentResolver.openOutputStream(target, "w")!!.use { out ->
                     val buf = ByteArray(64 * 1024)
                     while (true) {
@@ -88,6 +98,8 @@ class Downloader(context: Context) {
         } catch (e: Exception) {
             target?.let { runCatching { DocumentsContract.deleteDocument(app.contentResolver, it) } }
             post(id, req.fileName, "Download failed: ${e.message ?: "error"}", done = true, failed = true)
+        } finally {
+            req.localFile?.delete()
         }
     }
 
