@@ -1,7 +1,12 @@
 package dev.sk2andy.materialbrowser
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.webkit.CookieManager
+import android.webkit.URLUtil
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
@@ -29,6 +34,9 @@ class MainActivity : Activity() {
     private lateinit var addressBar: EditText
     private lateinit var progressBar: ProgressBar
 
+    private lateinit var downloader: Downloader
+    private var pendingDownload: Downloader.Request? = null
+
     private val backCallback = OnBackInvokedCallback {
         if (webView.canGoBack()) webView.goBack() else finish()
     }
@@ -36,6 +44,7 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        downloader = Downloader(this)
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
@@ -69,6 +78,9 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                onDownloadRequested(url, userAgent, contentDisposition, mimeType)
+            }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                     if (!addressBar.hasFocus()) addressBar.setText(url)
@@ -111,6 +123,54 @@ class MainActivity : Activity() {
 
         WebView.setWebContentsDebuggingEnabled(true) // step-1 diagnostics only
         webView.loadUrl("https://example.com")
+    }
+
+    /** Every download: ask for a folder, then save into it. */
+    private fun onDownloadRequested(url: String, ua: String?, disposition: String?, mime: String?) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            downloader.toast("This download type is not supported yet")
+            return
+        }
+        if (pendingDownload != null) {
+            downloader.toast("Choose a folder for the current download first")
+            return
+        }
+        pendingDownload = Downloader.Request(
+            url = url,
+            fileName = URLUtil.guessFileName(url, disposition, mime),
+            userAgent = ua,
+            referer = webView.url,
+            cookies = CookieManager.getInstance().getCookie(url),
+        )
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            // Ask once; the folder picker opens right after the answer.
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
+        } else {
+            openFolderPicker()
+        }
+    }
+
+    private fun openFolderPicker() =
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_FOLDER)
+
+    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(code, perms, results)
+        if (code == REQ_NOTIFY && pendingDownload != null) openFolderPicker()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_FOLDER) return
+        val req = pendingDownload
+        pendingDownload = null
+        val tree = data?.data
+        if (resultCode == RESULT_OK && tree != null && req != null) downloader.start(req, tree)
+    }
+
+    private companion object {
+        const val REQ_FOLDER = 1
+        const val REQ_NOTIFY = 2
     }
 
     private fun toUrl(input: String): String {
