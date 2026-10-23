@@ -1,7 +1,6 @@
 name: Build APK
 
 on:
-  push:
   workflow_dispatch:
 
 jobs:
@@ -35,7 +34,7 @@ jobs:
           "$SDKM" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Build debug APK
-        run: gradle --version && gradle :app:assembleDebug --stacktrace
+        run: gradle --version && gradle :app:assembleDebug --console=plain
 
       - uses: actions/upload-artifact@v4
         with:
