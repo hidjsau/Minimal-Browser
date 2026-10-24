@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
     private fun pillBg(focused: Boolean): Drawable =
         shape(
             c(M.attr.colorSurfaceContainerHigh),
-            if (focused) c(M.attr.colorPrimary) else 0,
+            if (focused) c(androidx.appcompat.R.attr.colorPrimary) else 0,
             if (focused) 2 else 0,
             24,
         )
@@ -355,7 +355,7 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
             trackThickness = dp(3)
             trackCornerRadius = dp(2)
-            setIndicatorColor(c(M.attr.colorPrimary))
+            setIndicatorColor(c(androidx.appcompat.R.attr.colorPrimary))
             trackColor = Color.TRANSPARENT
         }
 
@@ -532,11 +532,11 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             background = rippleBg(Color.TRANSPARENT, 28)
             setOnClickListener { popup.dismiss(); addProfileDialog() }
-            addView(iconView(R.drawable.ic_add, c(M.attr.colorPrimary), 14, 14), LinearLayout.LayoutParams(dp(52), dp(52)))
+            addView(iconView(R.drawable.ic_add, c(androidx.appcompat.R.attr.colorPrimary), 14, 14), LinearLayout.LayoutParams(dp(52), dp(52)))
             addView(TextView(context).apply {
                 text = "Add profile"
                 setTextAppearance(M.style.TextAppearance_Material3_LabelLarge)
-                setTextColor(c(M.attr.colorPrimary))
+                setTextColor(c(androidx.appcompat.R.attr.colorPrimary))
             })
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
 
@@ -803,7 +803,7 @@ class MainActivity : AppCompatActivity() {
             radius = dp(20).toFloat()
             cardElevation = 0f
             setCardBackgroundColor(if (sel) c(M.attr.colorSecondaryContainer) else c(M.attr.colorSurfaceContainerHigh))
-            strokeColor = c(M.attr.colorPrimary)
+            strokeColor = c(androidx.appcompat.R.attr.colorPrimary)
             strokeWidth = if (sel) dp(2) else 0
             isClickable = true
             isFocusable = true
@@ -1107,7 +1107,7 @@ class MainActivity : AppCompatActivity() {
         val extName = if (dot > 0) req.fileName.substring(dot + 1) else ""
         val ink = c(M.attr.colorOnSurface)
         val grey = c(M.attr.colorOnSurfaceVariant)
-        val primary = c(M.attr.colorPrimary)
+        val primary = c(androidx.appcompat.R.attr.colorPrimary)
 
         val nameLayout = outlinedField("File name")
         val nameField = TextInputEditText(nameLayout.context).apply { setSingleLine(true); setText(baseName) }
