@@ -77,7 +77,7 @@ private class Tab(val profileId: String) {
 }
 
 /**
- * Top bar: [ profile emoji | address bar | reload ] [tab button] [download] [menu].
+ * Top bar: [ tab button | address bar | reload ] [profile emoji] [download] [menu].
  * Profiles: floating list under the emoji. Tabs: card grid under the tab button.
  */
 class MainActivity : AppCompatActivity() {
@@ -272,8 +272,8 @@ class MainActivity : AppCompatActivity() {
             setTextAppearance(M.style.TextAppearance_Material3_LabelLarge)
             gravity = Gravity.CENTER
             setTextColor(c(M.attr.colorOnSurface))
-            // 26 dp rounded outline inside a 48 dp touch area, tab count inside
-            background = InsetDrawable(shape(Color.TRANSPARENT, c(M.attr.colorOnSurfaceVariant), 2, 8), dp(11))
+            // 26 dp rounded outline inside a 44x48 touch area, tab count inside
+            background = InsetDrawable(shape(Color.TRANSPARENT, c(M.attr.colorOnSurfaceVariant), 2, 8), dp(9), dp(11), dp(9), dp(11))
             foreground = circleRipple()
             contentDescription = "Tabs"
             setOnClickListener {
@@ -313,12 +313,12 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "Menu"
             setOnClickListener { showMenu(this) }
         }
-        // [ profile | address | reload ] in one search-style pill
+        // [ tabs | address | reload ] in one search-style pill
         addressPill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = pillBg(false)
-            addView(profileBtn, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(tabBtn, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
             addView(reloadBtn, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
         }
@@ -327,7 +327,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(4), dp(8))
             addView(addressPill, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(4) })
-            addView(tabBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(profileBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
             addView(downloadBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
             addView(menuBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
         }
