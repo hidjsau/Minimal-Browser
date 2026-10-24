@@ -124,7 +124,7 @@ class DownloadButton(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
-        val r = minOf(16f * d, minOf(width, height) / 2f)
+        val r = minOf(14f * d, minOf(width, height) / 2f)
 
         canvas.drawCircle(cx, cy, r, bgPaint)
 
@@ -141,11 +141,11 @@ class DownloadButton(context: Context) : View(context) {
         }
 
         arrow.reset()
-        arrow.moveTo(cx, cy - 6f * d)
-        arrow.lineTo(cx, cy + 5f * d)
-        arrow.moveTo(cx - 4.5f * d, cy + 0.5f * d)
-        arrow.lineTo(cx, cy + 5f * d)
-        arrow.lineTo(cx + 4.5f * d, cy + 0.5f * d)
+        arrow.moveTo(cx, cy - 5f * d)
+        arrow.lineTo(cx, cy + 4f * d)
+        arrow.moveTo(cx - 3.8f * d, cy + 0.2f * d)
+        arrow.lineTo(cx, cy + 4f * d)
+        arrow.lineTo(cx + 3.8f * d, cy + 0.2f * d)
         canvas.drawPath(arrow, arrowPaint)
     }
 

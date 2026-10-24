@@ -32,6 +32,9 @@ import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
+import android.provider.DocumentsContract
+import android.widget.ImageView
+import android.widget.SeekBar
 import android.view.inputmethod.InputMethodManager
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -51,6 +54,7 @@ import android.window.OnBackInvokedDispatcher
 private class Tab(val profileId: String) {
     lateinit var webView: WebView
     var title: String = ""
+    var loading: Boolean = false
 }
 
 /**
@@ -68,7 +72,12 @@ class MainActivity : Activity() {
     private var currentUrl = ""                      // full URL of the shown tab (the bar itself shows only the site name)
     private val dlProgress = HashMap<Int, Int>()     // active download id -> percent (-1 = unknown)
     private var askedNotify = false
-    private var textZoom = 100                       // page text size in percent, saved across restarts
+    private lateinit var reloadBtn: ImageView
+    private val prefs by lazy { getSharedPreferences("ui", MODE_PRIVATE) }
+    private var pendingTree: Uri? = null             // folder chosen while the notification permission is asked
+    private var permReq: Downloader.Request? = null
+    private var folderPickMode = 0
+    private var dialogFolderChanged: (() -> Unit)? = null
     private lateinit var tabBtn: TextView
     private lateinit var profileBtn: TextView
     private lateinit var webHolder: FrameLayout      // shows the selected tab's WebView
@@ -110,7 +119,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         downloader = Downloader(this)
-        textZoom = getSharedPreferences("ui", MODE_PRIVATE).getInt("textZoom", 100)
         cacheDir.listFiles()?.filter { it.name.startsWith("dl-") }?.forEach { it.delete() } // leftovers
 
         val root = LinearLayout(this).apply {
@@ -155,11 +163,11 @@ class MainActivity : Activity() {
             hint = "Search or enter address"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
-            textSize = 16f
+            textSize = 14f
             setTextColor(0xFF1B1B1B.toInt())
             setHintTextColor(0xFF80868B.toInt())
-            background = shape(0xFFF1F3F4.toInt(), radiusDp = 22)   // soft pill, no underline
-            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = shape(0xFFF1F3F4.toInt(), radiusDp = 18)   // soft pill, no underline
+            setPadding(dp(14), dp(4), dp(14), dp(4))
             setOnEditorActionListener { v, actionId, event ->
                 val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
                 if (actionId == EditorInfo.IME_ACTION_GO || enter) {
@@ -179,18 +187,31 @@ class MainActivity : Activity() {
             }
         }
         tabBtn = TextView(this).apply {
-            textSize = 15f
+            textSize = 13f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
             setTextColor(0xFF1B1B1B.toInt())
-            background = shape(Color.WHITE, 0xFF5F6368.toInt(), 2, 8)   // rectangle with the tab count inside
+            background = shape(Color.WHITE, 0xFF5F6368.toInt(), 2, 7)   // rectangle with the tab count inside
             setOnClickListener {
                 unfocusAddress()
                 if (gridScroll.visibility == View.VISIBLE) gridScroll.visibility = View.GONE else openGrid()
             }
         }
+        reloadBtn = iconView(R.drawable.ic_refresh).apply {
+            contentDescription = "Reload"
+            setOnClickListener {
+                unfocusAddress()
+                val t = current
+                if (t != null && t.loading) {
+                    t.webView.stopLoading()
+                    t.loading = false
+                    progressBar.visibility = View.GONE
+                    updateReloadButton()
+                } else t?.webView?.reload()
+            }
+        }
         profileBtn = TextView(this).apply {
-            textSize = 22f
+            textSize = 18f
             gravity = Gravity.CENTER
             setOnClickListener { showProfileList() }
         }
@@ -201,22 +222,20 @@ class MainActivity : Activity() {
             }
         }
         downloader.listener = { id, pct, done, failed -> onDownloadEvent(id, pct, done, failed) }
-        val menuBtn = TextView(this).apply {
-            text = "⋮"
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(0xFF1B1B1B.toInt())
+        val menuBtn = iconView(R.drawable.ic_more_vert).apply {
+            contentDescription = "Menu"
             setOnClickListener { showMenu(this) }
         }
         topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(4), dp(4), dp(4))
-            addView(addressBar, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
-            addView(tabBtn, LinearLayout.LayoutParams(dp(34), dp(30)).apply { marginStart = dp(4); marginEnd = dp(4) })
-            addView(profileBtn, LinearLayout.LayoutParams(dp(44), dp(48)))
-            addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
-            addView(menuBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
+            setPadding(dp(8), dp(2), dp(2), dp(2))
+            addView(addressBar, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
+            addView(tabBtn, LinearLayout.LayoutParams(dp(32), dp(28)))
+            addView(reloadBtn, LinearLayout.LayoutParams(dp(40), dp(44)))
+            addView(profileBtn, LinearLayout.LayoutParams(dp(40), dp(44)))
+            addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(44)))
+            addView(menuBtn, LinearLayout.LayoutParams(dp(40), dp(44)))
         }
 
         fun stripBtn(label: String, action: () -> Unit) = TextView(this).apply {
@@ -280,6 +299,20 @@ class MainActivity : Activity() {
         )
         WebView.setWebContentsDebuggingEnabled(true) // diagnostics only
         showProfile(profiles.activeId)
+    }
+
+    /** A 20 dp vector icon inside a 40x44 touch area (padding makes the icon size). */
+    private fun iconView(res: Int, tint: Int = 0xFF1B1B1B.toInt(), padH: Int = 10, padV: Int = 12) =
+        ImageView(this).apply {
+            setImageResource(res)
+            setColorFilter(tint)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(padH), dp(padV), dp(padH), dp(padV))
+        }
+
+    private fun updateReloadButton() {
+        reloadBtn.setImageResource(if (current?.loading == true) R.drawable.ic_close else R.drawable.ic_refresh)
+        reloadBtn.contentDescription = if (current?.loading == true) "Stop" else "Reload"
     }
 
     // ---- address bar ----------------------------------------------------------------------
@@ -512,7 +545,6 @@ class MainActivity : Activity() {
             WebViewCompat.setProfile(this, profile.id) // first call: before any loading
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            settings.textZoom = textZoom
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             val self = this
             setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -520,13 +552,18 @@ class MainActivity : Activity() {
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                    if (tab === current) showUrl(url)
+                    tab.loading = true
+                    view.settings.textZoom = zoomFor(url)
+                    if (tab === current) { showUrl(url); updateReloadButton() }
                     view.evaluateJavascript(NAME_HOOK, null)
                 }
                 override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                    view.settings.textZoom = zoomFor(url)
                     if (tab === current) showUrl(url)
                 }
                 override fun onPageFinished(view: WebView, url: String?) {
+                    tab.loading = false
+                    if (tab === current) updateReloadButton()
                     view.evaluateJavascript(NAME_HOOK, null)
                     if (url != null && url != "about:blank" && selected[tab.profileId] === tab) {
                         profiles.saveUrl(profile.id, url)
@@ -558,7 +595,9 @@ class MainActivity : Activity() {
                 }
 
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    if (newProgress >= 100) tab.loading = false
                     if (tab !== current) return
+                    updateReloadButton()
                     progressBar.progress = newProgress
                     progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
                 }
@@ -589,6 +628,7 @@ class MainActivity : Activity() {
         if (hideGrid) gridScroll.visibility = View.GONE
         updateProfileButton()
         updateTabButton()
+        updateReloadButton()
     }
 
     private fun destroyTab(tab: Tab) {
@@ -647,37 +687,35 @@ class MainActivity : Activity() {
                 setTextColor(0xFF1B1B1B.toInt())
                 setPadding(dp(12), dp(12), dp(44), dp(12))
             }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(TextView(context).apply {
-                text = "✕"
-                textSize = 16f
-                gravity = Gravity.CENTER
-                setTextColor(0xFF1B1B1B.toInt())
+            addView(iconView(R.drawable.ic_close, padH = 12, padV = 12).apply {
+                contentDescription = "Close tab"
                 setOnClickListener { closeTab(tab) }
             }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.END))
         }
     }
 
-    private fun plusCard(): View = TextView(this).apply {
-        text = "+"
-        textSize = 34f
-        gravity = Gravity.CENTER
-        setTextColor(0xFF1B1B1B.toInt())
+    private fun plusCard(): View = iconView(R.drawable.ic_add, padH = 36, padV = 36).apply {
+        contentDescription = "New tab"
         background = shape(0xFFE6E9E0.toInt(), radiusDp = 12)
         setOnClickListener { selectTab(newTab(profiles.active(), HOME)) }
     }
 
     private fun showMenu(anchor: View) {
         unfocusAddress()
+        val auto = prefs.getBoolean("dlAuto", false)
         PopupMenu(this, anchor).apply {
             menu.add(0, 1, 0, "Forward")
-            menu.add(0, 2, 1, "Reload")
-            menu.add(0, 3, 2, "Text size")
+            menu.add(0, 3, 1, "Text size: ${zoomFor(current?.webView?.url)}%")
+            menu.add(0, 4, 2, "Auto-download: ${if (auto) "On" else "Off"}")
             setOnMenuItemClickListener {
                 val w = current?.webView
                 when (it.itemId) {
                     1 -> if (w?.canGoForward() == true) w.goForward()
-                    2 -> w?.reload()
                     3 -> textSizeDialog()
+                    4 -> {
+                        prefs.edit().putBoolean("dlAuto", !auto).apply()
+                        downloader.toast(if (auto) "Auto-download off" else "Auto-download on")
+                    }
                 }
                 true
             }
@@ -685,39 +723,121 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun setTextZoom(percent: Int) {
-        textZoom = percent.coerceIn(50, 250)
-        getSharedPreferences("ui", MODE_PRIVATE).edit().putInt("textZoom", textZoom).apply()
-        tabs.forEach { it.webView.settings.textZoom = textZoom }
+    // ---- text size, remembered per site ---------------------------------------------------
+
+    /** "https://www.example.com/x" -> "example.com"; null for pages that are not websites. */
+    private fun hostKey(url: String?): String? {
+        if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null
+        return siteName(url).lowercase().takeIf { it.isNotBlank() }
     }
 
-    /** Page text size: A- / A+ in steps of 10%, applied to every tab right away. */
+    private fun zoomFor(url: String?): Int = hostKey(url)?.let { prefs.getInt("zoom:$it", 100) } ?: 100
+
+    /** Saves the size for a site and applies it to every open tab that shows that site. */
+    private fun setSiteZoom(host: String, percent: Int) {
+        val e = prefs.edit()
+        if (percent == 100) e.remove("zoom:$host") else e.putInt("zoom:$host", percent)
+        e.apply()
+        tabs.forEach { if (hostKey(it.webView.url) == host) it.webView.settings.textZoom = percent }
+    }
+
     private fun textSizeDialog() {
-        val label = TextView(this).apply {
-            textSize = 20f; gravity = Gravity.CENTER
-            setTextColor(0xFF1B1B1B.toInt())
-            text = "$textZoom%"
-        }
-        fun step(txt: String, delta: Int) = TextView(this).apply {
-            text = txt; textSize = 22f; gravity = Gravity.CENTER
+        val url = current?.webView?.url
+        val host = hostKey(url)
+        if (host == null) { downloader.toast("Open a website first"); return }
+        var updating = false
+
+        val readout = TextView(this).apply {
+            textSize = 40f; gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setTextColor(0xFF1B1B1B.toInt())
-            background = shape(0xFFEEF0EC.toInt(), radiusDp = 14)
-            setOnClickListener { setTextZoom(textZoom + delta); label.text = "$textZoom%" }
         }
-        val row = LinearLayout(this).apply {
+        val sub = TextView(this).apply {
+            text = "for $host"; textSize = 13f; gravity = Gravity.CENTER
+            setTextColor(0xFF5F6368.toInt())
+        }
+        val seek = SeekBar(this).apply { max = ZOOM_MAX - ZOOM_MIN }
+        val box = EditText(this).apply {
+            setSingleLine(true); textSize = 15f; gravity = Gravity.CENTER
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            background = shape(Color.WHITE, 0xFFB0B5BA.toInt(), 1, 10)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+
+        fun setZoom(v: Int, fromSeek: Boolean = false, fromBox: Boolean = false) {
+            updating = true
+            readout.text = "$v%"
+            if (!fromSeek) seek.progress = v - ZOOM_MIN
+            if (!fromBox) box.setText(v.toString())
+            updating = false
+            setSiteZoom(host, v)
+        }
+        /** Out-of-range or empty input snaps to the nearest limit (or the current value). */
+        fun commitBox() {
+            val n = box.text.toString().toIntOrNull()
+            setZoom(if (n == null) seek.progress + ZOOM_MIN else n.coerceIn(ZOOM_MIN, ZOOM_MAX))
+        }
+
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) setZoom(progress + ZOOM_MIN, fromSeek = true)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) {}
+            override fun onStopTrackingTouch(sb: SeekBar) {}
+        })
+        box.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) {
+                if (updating) return
+                val n = e?.toString()?.toIntOrNull() ?: return
+                if (n in ZOOM_MIN..ZOOM_MAX) setZoom(n, fromBox = true)
+            }
+        })
+        box.setOnEditorActionListener { v, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                commitBox()
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .hideSoftInputFromWindow(v.windowToken, 0)
+                v.clearFocus()
+                true
+            } else false
+        }
+        box.setOnFocusChangeListener { _, focused -> if (!focused) commitBox() }
+
+        val reset = TextView(this).apply {
+            text = "Reset"; textSize = 14f; gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF1B1B1B.toInt())
+            background = shape(0xFFEEF0EC.toInt(), radiusDp = 18)
+            isFocusable = false; isFocusableInTouchMode = false
+            setOnClickListener { setZoom(100) }
+        }
+        val exactRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(12), dp(20), dp(4))
-            addView(step("A−", -10), LinearLayout.LayoutParams(dp(64), dp(52)))
-            addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(step("A+", 10), LinearLayout.LayoutParams(dp(64), dp(52)))
+            setPadding(0, dp(16), 0, 0)
+            addView(TextView(context).apply {
+                text = "Exact size"; textSize = 14f; setTextColor(0xFF1B1B1B.toInt())
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(12) })
+            addView(box, LinearLayout.LayoutParams(0, dp(40), 1f))
+            addView(TextView(context).apply { text = "%"; textSize = 14f; setPadding(dp(4), 0, dp(12), 0) })
+            addView(reset, LinearLayout.LayoutParams(dp(80), dp(36)))
         }
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(14), dp(22), dp(4))
+            addView(readout)
+            addView(sub)
+            addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+            addView(exactRow)
+        }
+        setZoom(zoomFor(url))
         android.app.AlertDialog.Builder(this)
             .setTitle("Text size")
-            .setView(row)
-            .setNeutralButton("Reset") { _, _ -> setTextZoom(100) }
-            .setPositiveButton("Done", null)
+            .setView(col)
+            .setPositiveButton("Done") { _, _ -> commitBox() }
             .show()
     }
 
@@ -809,59 +929,172 @@ class MainActivity : Activity() {
         java.io.File(cacheDir, "dl-${System.nanoTime()}.tmp").also { it.writeBytes(bytes) }
     }.getOrNull()
 
-    /** The "Save file as" pop-up always appears; tapping Download saves straight into Downloads. */
+    // ---- Save dialog and folder -----------------------------------------------------------
+
+    private fun savedTree(): Uri? = prefs.getString("dlTree", null)?.let { Uri.parse(it) }
+
+    /** True when we still hold write access to the remembered folder and it still exists. */
+    private fun treeUsable(tree: Uri): Boolean {
+        val granted = contentResolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
+        if (!granted) return false
+        return runCatching {
+            val doc = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+            contentResolver.query(doc, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)
+                ?.use { it.moveToFirst() } ?: false
+        }.getOrDefault(false)
+    }
+
+    /** "primary:Download/Reports" -> "Internal storage/Download/Reports"; no tree = the public Downloads folder. */
+    private fun folderLabel(tree: Uri?): String {
+        if (tree == null) return "Internal storage/Download"
+        val id = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: return "Selected folder"
+        val root = if (id.substringBefore(':') == "primary") "Internal storage" else "SD card"
+        val path = id.substringAfter(':', "").trim('/')
+        return if (path.isEmpty()) root else "$root/$path"
+    }
+
+    private fun pickFolder(mode: Int) {
+        folderPickMode = mode
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            ),
+            REQ_FOLDER,
+        )
+    }
+
+    /**
+     * The Save pop-up. With "Download automatically next time" on, it is skipped and the file
+     * goes straight to the remembered folder.
+     */
     private fun askFolder(req: Downloader.Request) {
-        val dp = resources.displayMetrics.density
-        fun px(v: Int) = (v * dp).toInt()
+        if (prefs.getBoolean("dlAuto", false)) {
+            val t = savedTree()
+            if (t == null || treeUsable(t)) downloader.toast("Saving to ${folderLabel(t)}…")
+            startDownload(req)
+            return
+        }
         val dot = req.fileName.lastIndexOf('.')
         val baseName = if (dot > 0) req.fileName.substring(0, dot) else req.fileName
         val extName = if (dot > 0) req.fileName.substring(dot + 1) else ""
+        val ink = 0xFF1B1B1B.toInt()
+        val grey = 0xFF5F6368.toInt()
+        val green = 0xFF2E9E4F.toInt()
 
-        val nameField = EditText(this).apply {
-            setSingleLine(true); hint = "File name"; setText(baseName)
+        fun fieldLabel(t: String) = TextView(this).apply {
+            text = t; textSize = 12f; setTextColor(grey); setPadding(dp(4), dp(12), 0, dp(4))
         }
-        val extField = EditText(this).apply {
-            setSingleLine(true); hint = "ext"; setText(extName)
+        fun outlined(e: EditText) = e.apply {
+            setSingleLine(true); textSize = 15f; setTextColor(ink)
+            background = shape(Color.WHITE, 0xFFB0B5BA.toInt(), 1, 10)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val nameField = outlined(EditText(this)).apply { hint = "File name"; setText(baseName) }
+        val extField = outlined(EditText(this)).apply {
+            hint = "e.g. pdf"; setText(extName)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
         var active: EditText = nameField
         nameField.setOnFocusChangeListener { _, f -> if (f) active = nameField }
         extField.setOnFocusChangeListener { _, f -> if (f) active = extField }
 
-        fun tool(label: String, action: () -> Unit) = android.widget.Button(this).apply {
-            text = label; isAllCaps = false; isFocusable = false; isFocusableInTouchMode = false
+        fun chip(label: String, action: () -> Unit) = TextView(this).apply {
+            text = label; textSize = 12f; gravity = Gravity.CENTER; setTextColor(ink)
+            isFocusable = false; isFocusableInTouchMode = false
+            background = shape(0xFFEEF0EC.toInt(), radiusDp = 14)
+            setPadding(dp(12), dp(5), dp(12), dp(5))
             setOnClickListener { action() }
         }
+        fun chipLp() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }
         val tools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(tool("◀") { active.setSelection((active.selectionEnd - 1).coerceAtLeast(0)) })
-            addView(tool("▶") { active.setSelection((active.selectionEnd + 1).coerceAtMost(active.length())) })
-            addView(tool("Select all") { active.selectAll() })
+            setPadding(0, dp(8), 0, 0)
+            addView(chip("◀") { active.setSelection((active.selectionEnd - 1).coerceAtLeast(0)) }, chipLp())
+            addView(chip("▶") { active.setSelection((active.selectionEnd + 1).coerceAtMost(active.length())) }, chipLp())
+            addView(chip("Select all") { active.selectAll() }, chipLp())
         }
-        val extRow = LinearLayout(this).apply {
+
+        // Header: download badge, title and the site the file comes from.
+        val source = siteName(current?.webView?.url ?: req.url).ifBlank { "this page" }
+        val badge = FrameLayout(this).apply {
+            background = GradientDrawable().apply { setShape(GradientDrawable.OVAL); setColor(0xFFE3F6E7.toInt()) }
+            addView(iconView(R.drawable.ic_download, green, 10, 10), FrameLayout.LayoutParams(dp(40), dp(40)))
+        }
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            addView(TextView(context).apply { text = "Extension  ."; textSize = 14f })
-            addView(extField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(badge, LinearLayout.LayoutParams(dp(40), dp(40)))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(context).apply {
+                    text = "Save file"; textSize = 18f; setTextColor(ink)
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                })
+                addView(TextView(context).apply {
+                    text = "from $source"; textSize = 13f; setTextColor(grey); setSingleLine(true)
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
         }
+
+        // Folder card: where the file goes, with a Change button.
+        val folderText = TextView(this).apply {
+            text = folderLabel(savedTree()); textSize = 14f; setTextColor(ink)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 2; ellipsize = TextUtils.TruncateAt.MIDDLE
+        }
+        dialogFolderChanged = { folderText.text = folderLabel(savedTree()) }
+        val change = TextView(this).apply {
+            text = "Change"; textSize = 14f; setTextColor(green)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            isFocusable = false; isFocusableInTouchMode = false
+            setOnClickListener { pickFolder(PICK_DIALOG) }
+        }
+        val folderCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = shape(0xFFF6F8F5.toInt(), 0xFFDADDE0.toInt(), 1, 12)
+            setPadding(dp(12), dp(10), dp(4), dp(10))
+            addView(iconView(R.drawable.ic_folder, green, 0, 0), LinearLayout.LayoutParams(dp(24), dp(24)))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(context).apply { text = "Save to"; textSize = 12f; setTextColor(grey) })
+                addView(folderText)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+            addView(change)
+        }
+        val autoSwitch = android.widget.Switch(this).apply {
+            text = "Download automatically next time"; textSize = 14f; setTextColor(ink)
+            setPadding(0, dp(14), 0, dp(4))
+        }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(px(20), px(8), px(20), 0)
+            setPadding(dp(20), dp(16), dp(20), dp(4))
+            addView(header)
+            addView(fieldLabel("File name"))
             addView(nameField)
-            addView(extRow)
+            addView(fieldLabel("File type"))
+            addView(extField)
             addView(tools)
+            addView(View(context), LinearLayout.LayoutParams(1, dp(14)))
+            addView(folderCard)
+            addView(autoSwitch)
         }
+        val scroll = ScrollView(this).apply { addView(box) }
 
         var confirmed = false
         val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Save file as")
-            .setView(box)
+            .setView(scroll)
             .setPositiveButton("Download") { _, _ ->
                 confirmed = true
+                if (autoSwitch.isChecked) prefs.edit().putBoolean("dlAuto", true).apply()
                 val n = nameField.text.toString().replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
                 val e = extField.text.toString().trim().trimStart('.').replace(Regex("[\\\\/:*?\"<>|\\s]"), "")
                 val full = (if (n.isEmpty()) "download" else n) + (if (e.isEmpty()) "" else ".$e")
-                beginDownload(
+                startDownload(
                     Downloader.Request(
                         url = req.url, fileName = full, userAgent = req.userAgent,
                         referer = req.referer, cookies = req.cookies,
@@ -871,33 +1104,48 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancel", null)
             .setOnDismissListener {
+                dialogFolderChanged = null
                 if (!confirmed) { busy = false; req.localFile?.delete() }
             }
             .create()
-        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
         dialog.show()
         nameField.requestFocus()
         nameField.setSelection(nameField.length()) // cursor at the end of the name
     }
 
-    private fun beginDownload(req: Downloader.Request) {
+    /** Uses the remembered folder; if it is gone, asks for a folder again instead of failing. */
+    private fun startDownload(req: Downloader.Request) {
         busy = false
+        val tree = savedTree()
+        if (tree != null && !treeUsable(tree)) {
+            prefs.edit().remove("dlTree").apply()
+            downloader.toast("Saved folder is not available. Choose a folder")
+            pendingDownload = req
+            pickFolder(PICK_FOR_DOWNLOAD)
+            return
+        }
+        launchDownload(req, tree)
+    }
+
+    private fun launchDownload(req: Downloader.Request, tree: Uri?) {
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !askedNotify) {
             // Ask once for the progress notification; the download starts right after the answer.
             askedNotify = true
-            pendingDownload = req
+            permReq = req
+            pendingTree = tree
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
         } else {
-            downloader.start(req)
+            downloader.start(req, tree, folderLabel(tree))
         }
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, perms, results)
         if (code == REQ_NOTIFY) {
-            val req = pendingDownload
-            pendingDownload = null
-            if (req != null) downloader.start(req)
+            val req = permReq
+            permReq = null
+            if (req != null) downloader.start(req, pendingTree, folderLabel(pendingTree))
         }
     }
 
@@ -908,11 +1156,38 @@ class MainActivity : Activity() {
             val cb = uploadCallback
             uploadCallback = null
             cb?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            return
+        }
+        if (requestCode != REQ_FOLDER) return
+        val mode = folderPickMode
+        folderPickMode = 0
+        val tree = data?.data
+        if (resultCode == RESULT_OK && tree != null) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            prefs.edit().putString("dlTree", tree.toString()).apply()   // remembered for next time
+            dialogFolderChanged?.invoke()
+            if (mode == PICK_FOR_DOWNLOAD) {
+                val req = pendingDownload
+                pendingDownload = null
+                if (req != null) launchDownload(req, tree)
+            }
+        } else if (mode == PICK_FOR_DOWNLOAD) {
+            pendingDownload?.localFile?.delete()   // picker cancelled
+            pendingDownload = null
         }
     }
 
     private companion object {
+        const val REQ_FOLDER = 1
         const val REQ_NOTIFY = 2
+        const val PICK_DIALOG = 1
+        const val PICK_FOR_DOWNLOAD = 2
+        const val ZOOM_MIN = 50
+        const val ZOOM_MAX = 300
         const val REQ_UPLOAD = 3
         const val HOME = "https://www.google.com"
         const val Profile_DEFAULT = "Default"

@@ -1,17 +1,30 @@
-Candy Min browser - UI update (all patches combined)
+v14 - what changed (on top of v13)
 
-Upload every file in this zip to the ROOT of your GitHub repo (the .github folder too),
-overwriting the old ones, then run Actions > "Build APK".
+Top bar
+- Slim: address bar 36dp, smaller text, 20dp icons, buttons 40x44dp.
+- Reload button next to the tab button; becomes X (stop) while a page loads.
+- "Reload" removed from the 3-dot menu. Menu icons are vector drawables (ic_*.xml).
 
-Changed:  app__MainActivity.kt, app__Downloader.kt, app__build.gradle.kts, res__values__themes.xml
-New:      res__drawable__ic_refresh.xml, ic_download.xml, ic_folder.xml
-Updated:  res__drawable__ic_more_vert.xml, ic_close.xml, ic_add.xml
+Save file pop-up
+- Header (download badge, "Save file", source site), outlined name/type fields,
+  smaller cursor buttons, "Save to" folder card with Change, and the switch
+  "Download automatically next time".
 
-What is in it
-- Material 3 theme (dynamic color, light/dark) + material library dependency
-- Slim address bar and icons, reload/stop button next to the tab button
-- Redesigned tab cards, menu, profile list and dialogs
-- Save-file dialog with folder path, "Change" folder, remembered last folder,
-  and auto-download switch (also in the menu)
-- Richer download notification (folder, size, tap to open)
-- Text size control (menu > Text size): slider + exact percent box, saved per website
+Folder + auto-download
+- Default folder: public Downloads (no picker). Change picks another folder; it is remembered.
+- Auto-download ON: no pop-up, "Saving to ..." toast, straight to the remembered folder.
+- Menu: "Auto-download: On/Off" toggles it any time.
+- Remembered folder deleted / access lost: app asks for a folder again.
+
+Download notification card
+- File name, destination folder, "42% . 3.1 MB of 7.4 MB", theme colour.
+- Done: "Download complete . 7.4 MB . Tap to open" (opens the file). Failures show the reason.
+
+Text size (menu: "Text size: N%")
+- Slider 50-300% (1% steps), live, big readout; "Exact size" box + Reset.
+- Out-of-range numbers snap to the nearest limit on keyboard Done / leaving the box.
+- Remembered per website; all tabs on that site and later visits use it; other sites stay 100%.
+
+Earlier (v8-v13): address bar shows site name only + Copy/Delete/Paste/Go/Close strip,
+download button with fill progress, dark status bar icons, release-APK build.yml,
+candy app icon, tab count in a rectangle.
