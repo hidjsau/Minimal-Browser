@@ -68,6 +68,7 @@ class MainActivity : Activity() {
     private var currentUrl = ""                      // full URL of the shown tab (the bar itself shows only the site name)
     private val dlProgress = HashMap<Int, Int>()     // active download id -> percent (-1 = unknown)
     private var askedNotify = false
+    private var textZoom = 100                       // page text size in percent, saved across restarts
     private lateinit var tabBtn: TextView
     private lateinit var profileBtn: TextView
     private lateinit var webHolder: FrameLayout      // shows the selected tab's WebView
@@ -109,6 +110,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         downloader = Downloader(this)
+        textZoom = getSharedPreferences("ui", MODE_PRIVATE).getInt("textZoom", 100)
         cacheDir.listFiles()?.filter { it.name.startsWith("dl-") }?.forEach { it.delete() } // leftovers
 
         val root = LinearLayout(this).apply {
@@ -177,10 +179,11 @@ class MainActivity : Activity() {
             }
         }
         tabBtn = TextView(this).apply {
-            textSize = 14f
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
             setTextColor(0xFF1B1B1B.toInt())
-            background = shape(Color.WHITE, 0xFF9AA0A6.toInt(), 1, 10)
+            background = shape(Color.WHITE, 0xFF5F6368.toInt(), 2, 8)   // rectangle with the tab count inside
             setOnClickListener {
                 unfocusAddress()
                 if (gridScroll.visibility == View.VISIBLE) gridScroll.visibility = View.GONE else openGrid()
@@ -210,7 +213,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), dp(4), dp(4), dp(4))
             addView(addressBar, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
-            addView(tabBtn, LinearLayout.LayoutParams(dp(44), dp(32)).apply { marginStart = dp(4) })
+            addView(tabBtn, LinearLayout.LayoutParams(dp(34), dp(30)).apply { marginStart = dp(4); marginEnd = dp(4) })
             addView(profileBtn, LinearLayout.LayoutParams(dp(44), dp(48)))
             addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
             addView(menuBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
@@ -509,6 +512,7 @@ class MainActivity : Activity() {
             WebViewCompat.setProfile(this, profile.id) // first call: before any loading
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.textZoom = textZoom
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             val self = this
             setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -607,7 +611,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateTabButton() {
-        tabBtn.text = "▢ ${tabs.count { it.profileId == profiles.activeId }}"
+        tabBtn.text = tabs.count { it.profileId == profiles.activeId }.toString()
     }
 
     private fun openGrid() {
@@ -667,16 +671,54 @@ class MainActivity : Activity() {
         PopupMenu(this, anchor).apply {
             menu.add(0, 1, 0, "Forward")
             menu.add(0, 2, 1, "Reload")
+            menu.add(0, 3, 2, "Text size")
             setOnMenuItemClickListener {
                 val w = current?.webView
                 when (it.itemId) {
                     1 -> if (w?.canGoForward() == true) w.goForward()
                     2 -> w?.reload()
+                    3 -> textSizeDialog()
                 }
                 true
             }
             show()
         }
+    }
+
+    private fun setTextZoom(percent: Int) {
+        textZoom = percent.coerceIn(50, 250)
+        getSharedPreferences("ui", MODE_PRIVATE).edit().putInt("textZoom", textZoom).apply()
+        tabs.forEach { it.webView.settings.textZoom = textZoom }
+    }
+
+    /** Page text size: A- / A+ in steps of 10%, applied to every tab right away. */
+    private fun textSizeDialog() {
+        val label = TextView(this).apply {
+            textSize = 20f; gravity = Gravity.CENTER
+            setTextColor(0xFF1B1B1B.toInt())
+            text = "$textZoom%"
+        }
+        fun step(txt: String, delta: Int) = TextView(this).apply {
+            text = txt; textSize = 22f; gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF1B1B1B.toInt())
+            background = shape(0xFFEEF0EC.toInt(), radiusDp = 14)
+            setOnClickListener { setTextZoom(textZoom + delta); label.text = "$textZoom%" }
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+            addView(step("A−", -10), LinearLayout.LayoutParams(dp(64), dp(52)))
+            addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(step("A+", 10), LinearLayout.LayoutParams(dp(64), dp(52)))
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Text size")
+            .setView(row)
+            .setNeutralButton("Reset") { _, _ -> setTextZoom(100) }
+            .setPositiveButton("Done", null)
+            .show()
     }
 
     /** Drives the top-bar download button from the downloader's events. */
