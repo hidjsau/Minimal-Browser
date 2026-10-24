@@ -62,7 +62,6 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.materialswitch.MaterialSwitch
-import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.slider.Slider
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.textfield.TextInputEditText
@@ -77,19 +76,24 @@ private class Tab(val profileId: String) {
 }
 
 /**
- * Top bar: [ tab button | address bar | reload ] [profile emoji] [download] [menu].
+ * Top bar (one row): [ tab button | address bar | reload ] [back] [forward] [profile emoji] [download] [menu].
+ * While the address bar has focus, everything else hides: the bar is all text field with
+ * copy / cut / delete / select all / go / cancel icons at its right end.
  * Profiles: floating list under the emoji. Tabs: card grid under the tab button.
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var addressBar: EditText
-    private lateinit var progressBar: LinearProgressIndicator
+    private lateinit var progressBar: RgbProgressBar
     private lateinit var addressPill: LinearLayout
+    private lateinit var backBtn: ImageView
+    private lateinit var rightGroup: LinearLayout     // back, forward, profile, download, menu
+    private lateinit var fwdBtn: ImageView
     private lateinit var gridFab: ExtendedFloatingActionButton
     private var nightMode = false
     private lateinit var topRow: LinearLayout
     private lateinit var rootLayout: LinearLayout
-    private lateinit var editStrip: LinearLayout     // Copy / Delete / Paste, shown while the address bar has focus
+    private lateinit var editStrip: LinearLayout     // edit icons inside the pill, shown while the address bar has focus
     private lateinit var downloadBtn: DownloadButton
     private var currentUrl = ""                      // full URL of the shown tab (the bar itself shows only the site name)
     private val dlProgress = HashMap<Int, Int>()     // active download id -> percent (-1 = unknown)
@@ -258,7 +262,7 @@ class MainActivity : AppCompatActivity() {
             }
             // Tapped: show the full address (selected, ready to replace) and the Copy/Delete/Paste strip.
             setOnFocusChangeListener { v, focused ->
-                editStrip.visibility = if (focused) View.VISIBLE else View.GONE
+                setEditMode(focused)
                 addressPill.background = pillBg(focused)
                 if (focused) {
                     setText(currentUrl)
@@ -272,8 +276,8 @@ class MainActivity : AppCompatActivity() {
             setTextAppearance(M.style.TextAppearance_Material3_LabelLarge)
             gravity = Gravity.CENTER
             setTextColor(c(M.attr.colorOnSurface))
-            // 26 dp rounded outline inside a 44x48 touch area, tab count inside
-            background = InsetDrawable(shape(Color.TRANSPARENT, c(M.attr.colorOnSurfaceVariant), 2, 8), dp(9), dp(11), dp(9), dp(11))
+            // 26 dp rounded outline inside a 40x48 touch area, tab count inside
+            background = InsetDrawable(shape(Color.TRANSPARENT, c(M.attr.colorOnSurfaceVariant), 2, 8), dp(7), dp(11), dp(7), dp(11))
             foreground = circleRipple()
             contentDescription = "Tabs"
             setOnClickListener {
@@ -281,7 +285,7 @@ class MainActivity : AppCompatActivity() {
                 if (gridScroll.visibility == View.VISIBLE) gridScroll.visibility = View.GONE else openGrid()
             }
         }
-        reloadBtn = iconView(R.drawable.ic_refresh).apply {
+        reloadBtn = iconView(R.drawable.ic_refresh, padH = 8).apply {
             contentDescription = "Reload"
             setOnClickListener {
                 unfocusAddress()
@@ -309,55 +313,65 @@ class MainActivity : AppCompatActivity() {
             }
         }
         downloader.listener = { id, pct, done, failed -> onDownloadEvent(id, pct, done, failed) }
-        val menuBtn = iconView(R.drawable.ic_more_vert).apply {
+        val menuBtn = iconView(R.drawable.ic_more_vert, padH = 8).apply {
             contentDescription = "Menu"
             setOnClickListener { showMenu(this) }
         }
-        // [ tabs | address | reload ] in one search-style pill
+        // Edit icons: shown at the right end of the bar while the address is being edited.
+        fun editIcon(res: Int, desc: String, tint: Int = c(M.attr.colorOnSurfaceVariant), action: () -> Unit) =
+            iconView(res, tint, 6, 12).apply {
+                contentDescription = desc
+                isFocusable = false; isFocusableInTouchMode = false   // never steal focus from the text field
+                setOnClickListener { action() }
+            }
+        editStrip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            val lp = { LinearLayout.LayoutParams(dp(36), ViewGroup.LayoutParams.MATCH_PARENT) }
+            addView(editIcon(R.drawable.ic_copy, "Copy") { copyAddress() }, lp())
+            addView(editIcon(R.drawable.ic_content_cut, "Cut") { cutAddress() }, lp())
+            addView(editIcon(R.drawable.ic_delete, "Delete") { addressBar.setText("") }, lp())
+            addView(editIcon(R.drawable.ic_select_all, "Select all") { addressBar.selectAll() }, lp())
+            addView(editIcon(R.drawable.ic_arrow_forward, "Go", c(androidx.appcompat.R.attr.colorPrimary)) { submitAddress() }, lp())
+            addView(editIcon(R.drawable.ic_close, "Cancel") { unfocusAddress() }, lp())
+        }
+        // [ tabs | address | reload | edit icons ] in one search-style pill
         addressPill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = pillBg(false)
-            addView(tabBtn, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(tabBtn, LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-            addView(reloadBtn, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(reloadBtn, LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(editStrip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        backBtn = iconView(R.drawable.ic_arrow_back, padH = 6).apply {
+            contentDescription = "Back"
+            setOnClickListener { unfocusAddress(); current?.webView?.takeIf { it.canGoBack() }?.goBack() }
+        }
+        fwdBtn = iconView(R.drawable.ic_arrow_forward, padH = 6).apply {
+            contentDescription = "Forward"
+            setOnClickListener { unfocusAddress(); current?.webView?.takeIf { it.canGoForward() }?.goForward() }
+        }
+        rightGroup = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(backBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
+            addView(fwdBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
+            addView(profileBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
+            addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
+            addView(menuBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
         }
         topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(8), dp(4), dp(8))
-            addView(addressPill, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(4) })
-            addView(profileBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
-            addView(downloadBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
-            addView(menuBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+            setPadding(dp(10), dp(6), dp(2), dp(6))
+            addView(addressPill, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(2) })
+            addView(rightGroup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
         }
 
-        editStrip = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), 0, dp(4), dp(4))
-            visibility = View.GONE
-            val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
-            addView(mBtn("Copy", 2) { copyAddress() }, LinearLayout.LayoutParams(wrap, wrap))
-            addView(mBtn("Delete", 2) { addressBar.setText("") }, LinearLayout.LayoutParams(wrap, wrap))
-            addView(mBtn("Paste", 2) { pasteIntoAddress() }, LinearLayout.LayoutParams(wrap, wrap))
-            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))   // pushes Go / Close to the right edge
-            addView(mBtn("Go", 0) { submitAddress() }, LinearLayout.LayoutParams(wrap, wrap))
-            addView(iconView(R.drawable.ic_close).apply {
-                contentDescription = "Close"
-                isFocusable = false; isFocusableInTouchMode = false
-                setOnClickListener { unfocusAddress() }
-            }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        }
-
-        progressBar = LinearProgressIndicator(this).apply {
-            max = 100
-            visibility = View.GONE
-            trackThickness = dp(3)
-            trackCornerRadius = dp(2)
-            setIndicatorColor(c(androidx.appcompat.R.attr.colorPrimary))
-            trackColor = Color.TRANSPARENT
-        }
+        progressBar = RgbProgressBar(this).apply { visibility = View.GONE }
 
         webHolder = FrameLayout(this)
         gridBox = LinearLayout(this).apply {
@@ -390,7 +404,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(topRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(editStrip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
         root.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
@@ -438,6 +451,25 @@ class MainActivity : AppCompatActivity() {
     private fun showUrl(url: String?) {
         currentUrl = url.orEmpty()
         if (!addressBar.hasFocus()) addressBar.setText(siteName(url))
+        updateNavButtons()
+    }
+
+    /** Back / Forward look disabled (38%) when the tab has nowhere to go. */
+    private fun updateNavButtons() {
+        if (!::backBtn.isInitialized) return
+        val w = current?.webView
+        backBtn.alpha = if (w?.canGoBack() == true) 1f else 0.38f
+        fwdBtn.alpha = if (w?.canGoForward() == true) 1f else 0.38f
+    }
+
+    /** Editing: the whole bar becomes the text field with edit icons at its right; everything else hides. */
+    private fun setEditMode(on: Boolean) {
+        val other = if (on) View.GONE else View.VISIBLE
+        tabBtn.visibility = other
+        reloadBtn.visibility = other
+        rightGroup.visibility = other
+        editStrip.visibility = if (on) View.VISIBLE else View.GONE
+        (addressPill.layoutParams as? LinearLayout.LayoutParams)?.marginEnd = if (on) 0 else dp(2)
     }
 
     private fun unfocusAddress() {
@@ -455,12 +487,31 @@ class MainActivity : AppCompatActivity() {
         unfocusAddress()
     }
 
+    /** The selected part of the address, or all of it when nothing is selected. */
+    private fun selectedOrAll(): String {
+        val e = addressBar.text
+        val a = minOf(addressBar.selectionStart, addressBar.selectionEnd).coerceAtLeast(0)
+        val b = maxOf(addressBar.selectionStart, addressBar.selectionEnd).coerceAtLeast(0)
+        return if (a != b) e.substring(a, b) else e.toString()
+    }
+
     private fun copyAddress() {
-        val text = addressBar.text.toString()
+        val text = selectedOrAll()
         if (text.isEmpty()) { say("Nothing to copy"); return }
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
             .setPrimaryClip(ClipData.newPlainText("address", text))
         say("Copied")
+    }
+
+    private fun cutAddress() {
+        val text = selectedOrAll()
+        if (text.isEmpty()) { say("Nothing to cut"); return }
+        val a = minOf(addressBar.selectionStart, addressBar.selectionEnd).coerceAtLeast(0)
+        val b = maxOf(addressBar.selectionStart, addressBar.selectionEnd).coerceAtLeast(0)
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+            .setPrimaryClip(ClipData.newPlainText("address", text))
+        if (a != b) addressBar.text.delete(a, b) else addressBar.setText("")
+        say("Cut")
     }
 
     private fun pasteIntoAddress() {
@@ -557,7 +608,7 @@ class MainActivity : AppCompatActivity() {
             elevation = dp(8).toFloat()
         }
         profilePopup = popup
-        popup.showAsDropDown(topRow, -dp(8), 0, Gravity.END)
+        popup.showAsDropDown(profileBtn, 0, 0, Gravity.START)
     }
 
     private fun nameDialog(title: String, initial: String, onOk: (String) -> Unit) {
@@ -680,7 +731,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onPageFinished(view: WebView, url: String?) {
                     tab.loading = false
-                    if (tab === current) updateReloadButton()
+                    if (tab === current) { updateReloadButton(); updateNavButtons() }
                     view.evaluateJavascript(NAME_HOOK, null)
                     if (url != null && url != "about:blank" && selected[tab.profileId] === tab) {
                         profiles.saveUrl(profile.id, url)
@@ -715,8 +766,8 @@ class MainActivity : AppCompatActivity() {
                     if (newProgress >= 100) tab.loading = false
                     if (tab !== current) return
                     updateReloadButton()
-                    progressBar.setProgressCompat(newProgress, true)
                     progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
+                    progressBar.setProgressAnimated(newProgress)
                 }
             }
         }
@@ -836,29 +887,115 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMenu(anchor: View) {
         unfocusAddress()
-        val auto = prefs.getBoolean("dlAuto", false)
-        val tint = ColorStateList.valueOf(c(M.attr.colorOnSurfaceVariant))
-        PopupMenu(this, anchor).apply {
-            fun item(id: Int, order: Int, title: String, icon: Int) =
-                menu.add(0, id, order, title).apply { setIcon(icon); iconTintList = tint }
-            item(1, 0, "Forward", R.drawable.ic_arrow_forward)
-            item(3, 1, "Text size: ${zoomFor(current?.webView?.url)}%", R.drawable.ic_text_size)
-            item(4, 2, "Auto-download: ${if (auto) "On" else "Off"}", R.drawable.ic_download)
-            setForceShowIcon(true)
-            setOnMenuItemClickListener {
-                val w = current?.webView
-                when (it.itemId) {
-                    1 -> if (w?.canGoForward() == true) w.goForward()
-                    3 -> textSizeDialog()
-                    4 -> {
-                        prefs.edit().putBoolean("dlAuto", !auto).apply()
-                        say(if (auto) "Auto-download off" else "Auto-download on")
-                    }
-                }
-                true
-            }
-            show()
+        profilePopup?.dismiss()
+        val onSurface = c(M.attr.colorOnSurface)
+        val variant = c(M.attr.colorOnSurfaceVariant)
+        val primary = c(androidx.appcompat.R.attr.colorPrimary)
+        val w0 = current?.webView
+        val host = hostKey(w0?.url)
+        val profile = profiles.active()
+        val full = ViewGroup.LayoutParams.MATCH_PARENT
+        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
         }
+        lateinit var popup: PopupWindow
+
+        fun label(t: String, style: Int, color: Int) = TextView(this).apply {
+            text = t; setTextAppearance(style); setTextColor(color)
+            setSingleLine(true); ellipsize = TextUtils.TruncateAt.END
+        }
+        fun section(t: String) = label(t, M.style.TextAppearance_Material3_LabelLarge, primary)
+            .apply { setPadding(dp(8), dp(16), dp(8), dp(4)) }
+
+        /** Header card: current profile and site. */
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = shape(c(M.attr.colorPrimaryContainer), radiusDp = 24)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            addView(FrameLayout(context).apply {
+                background = GradientDrawable().apply { setShape(GradientDrawable.OVAL); setColor(c(M.attr.colorSurface)) }
+                addView(TextView(context).apply { text = profile.emoji; textSize = 22f; gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(dp(48), dp(48)))
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label(profile.name, M.style.TextAppearance_Material3_TitleMedium, c(M.attr.colorOnPrimaryContainer)))
+                addView(label(host ?: "New tab", M.style.TextAppearance_Material3_BodyMedium, c(M.attr.colorOnPrimaryContainer)).apply { alpha = 0.8f })
+            }, LinearLayout.LayoutParams(0, wrap, 1f).apply { marginStart = dp(16) })
+        }
+        box.addView(header, LinearLayout.LayoutParams(full, wrap))
+
+        /** One menu row: tonal icon badge, title + subtitle, optional trailing view. */
+        fun row(icon: Int, title: String, subtitle: String, trailing: View?, enabled: Boolean = true, onClick: () -> Unit): View {
+            val badge = FrameLayout(this).apply {
+                background = GradientDrawable().apply { setShape(GradientDrawable.OVAL); setColor(c(M.attr.colorSecondaryContainer)) }
+                addView(ImageView(context).apply {
+                    setImageResource(icon)
+                    setColorFilter(c(M.attr.colorOnSecondaryContainer))
+                    setPadding(dp(9), dp(9), dp(9), dp(9))
+                }, FrameLayout.LayoutParams(dp(42), dp(42)))
+            }
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(64)
+                alpha = if (enabled) 1f else 0.38f
+                background = rippleBg(Color.TRANSPARENT, 20)
+                setPadding(dp(8), dp(8), dp(12), dp(8))
+                addView(badge, LinearLayout.LayoutParams(dp(42), dp(42)))
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(label(title, M.style.TextAppearance_Material3_BodyLarge, onSurface))
+                    addView(label(subtitle, M.style.TextAppearance_Material3_BodySmall, variant))
+                }, LinearLayout.LayoutParams(0, wrap, 1f).apply { marginStart = dp(16); marginEnd = dp(8) })
+                if (trailing != null) addView(trailing)
+                setOnClickListener { if (enabled) onClick() }
+            }
+        }
+
+        box.addView(section("Page"))
+        box.addView(row(R.drawable.ic_text_size, "Text size", host?.let { "Saved for $it" } ?: "Open a website first",
+            label("${zoomFor(w0?.url)}%", M.style.TextAppearance_Material3_LabelLarge, primary), enabled = host != null) {
+            popup.dismiss(); textSizeDialog()
+        }, LinearLayout.LayoutParams(full, wrap))
+
+        box.addView(section("Downloads"))
+        val auto = prefs.getBoolean("dlAuto", false)
+        val sw = MaterialSwitch(this).apply { isChecked = auto; isClickable = false; isFocusable = false }
+        box.addView(row(R.drawable.ic_download, "Auto-download", "Save files without asking each time", sw) {
+            val on = !sw.isChecked
+            sw.isChecked = on                       // stays open so the switch animates
+            prefs.edit().putBoolean("dlAuto", on).apply()
+            say(if (on) "Auto-download on" else "Auto-download off")
+        }, LinearLayout.LayoutParams(full, wrap))
+
+        val scroll = ScrollView(this).apply {
+            background = shape(c(M.attr.colorSurfaceContainerLow), radiusDp = 32)
+            clipToOutline = true
+            addView(box)
+        }
+        val w = minOf(dp(320), resources.displayMetrics.widthPixels - dp(24))
+        box.measure(
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val h = minOf(box.measuredHeight + dp(4), (resources.displayMetrics.heightPixels * 0.8).toInt())
+        popup = PopupWindow(scroll, w, h, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+        }
+        profilePopup = popup
+        popup.showAsDropDown(anchor, 0, 0, Gravity.END)
+        // M3 emphasized-decelerate entrance: fade + scale from the top-right corner
+        scroll.pivotX = w.toFloat(); scroll.pivotY = 0f
+        scroll.alpha = 0f; scroll.scaleX = 0.9f; scroll.scaleY = 0.9f
+        scroll.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(220)
+            .setInterpolator(android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)).start()
     }
 
     // ---- text size, remembered per site ---------------------------------------------------

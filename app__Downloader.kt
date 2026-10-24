@@ -222,7 +222,7 @@ class Downloader(context: Context) {
             .setContentTitle(title)
             .setContentText(text)
             .setSubText(dest)                 // destination folder
-            .setColor(ACCENT)                 // theme colour
+            .setColor(app.getColor(R.color.md_light_primary))   // brand colour (M3 primary)
             .setOnlyAlertOnce(true)
             .setSmallIcon(
                 when {
@@ -249,6 +249,5 @@ class Downloader(context: Context) {
 
     private companion object {
         const val CHANNEL = "downloads"
-        const val ACCENT = 0xFF2E9E4F.toInt()
     }
 }
