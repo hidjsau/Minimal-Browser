@@ -124,6 +124,15 @@ class MainActivity : Activity() {
             WindowInsets.CONSUMED
         }
         setContentView(root)
+        // White bars, so the system icons (clock, battery, nav buttons) must be dark to be visible.
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        window.insetsController?.setSystemBarsAppearance(
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+        )
 
         // Every profile needs its own storage. Never fall back to shared storage.
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
@@ -144,14 +153,15 @@ class MainActivity : Activity() {
             hint = "Search or enter address"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            textSize = 16f
+            setTextColor(0xFF1B1B1B.toInt())
+            setHintTextColor(0xFF80868B.toInt())
+            background = shape(0xFFF1F3F4.toInt(), radiusDp = 22)   // soft pill, no underline
+            setPadding(dp(16), dp(10), dp(16), dp(10))
             setOnEditorActionListener { v, actionId, event ->
                 val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
                 if (actionId == EditorInfo.IME_ACTION_GO || enter) {
-                    val target = toUrl(v.text.toString())
-                    currentUrl = target
-                    current?.webView?.loadUrl(target)
-                    unfocusAddress()
+                    submitAddress()
                     true
                 } else false
             }
@@ -170,7 +180,7 @@ class MainActivity : Activity() {
             textSize = 14f
             gravity = Gravity.CENTER
             setTextColor(0xFF1B1B1B.toInt())
-            background = shape(Color.WHITE, 0xFF8A8A8A.toInt(), 1, 8)
+            background = shape(Color.WHITE, 0xFF9AA0A6.toInt(), 1, 10)
             setOnClickListener {
                 unfocusAddress()
                 if (gridScroll.visibility == View.VISIBLE) gridScroll.visibility = View.GONE else openGrid()
@@ -198,7 +208,8 @@ class MainActivity : Activity() {
         topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            setPadding(dp(8), dp(4), dp(4), dp(4))
+            addView(addressBar, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
             addView(tabBtn, LinearLayout.LayoutParams(dp(44), dp(32)).apply { marginStart = dp(4) })
             addView(profileBtn, LinearLayout.LayoutParams(dp(44), dp(48)))
             addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
@@ -218,17 +229,27 @@ class MainActivity : Activity() {
         editStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(2), dp(8), dp(6))
+            setPadding(dp(12), dp(2), dp(12), dp(8))
             visibility = View.GONE
             val lp = { LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) } }
             addView(stripBtn("Copy") { copyAddress() }, lp())
             addView(stripBtn("Delete") { addressBar.setText("") }, lp())
             addView(stripBtn("Paste") { pasteIntoAddress() }, lp())
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))   // pushes Close to the right edge
+            addView(stripBtn("Go") { submitAddress() }.apply {
+                background = shape(0xFFB7F0BE.toInt(), radiusDp = 18)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }, lp())
+            addView(stripBtn("✕  Close") { unfocusAddress() }.apply {
+                background = shape(0xFFDADDE0.toInt(), radiusDp = 18)
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             visibility = View.GONE
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFF2E9E4F.toInt())
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.TRANSPARENT)
         }
 
         webHolder = FrameLayout(this)
@@ -246,20 +267,10 @@ class MainActivity : Activity() {
             addView(gridScroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
 
-        val status = TextView(this).apply {
-            textSize = 11f
-            setTextColor(Color.GRAY)
-            setPadding(dp(12), dp(4), dp(12), dp(4))
-            val pkg = WebView.getCurrentWebViewPackage()
-            text = if (pkg != null) "System WebView: ${pkg.packageName} ${pkg.versionName}"
-            else "System WebView: not found"
-        }
-
         root.addView(topRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(editStrip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
         root.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         onBackInvokedDispatcher.registerOnBackInvokedCallback(
             OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback
@@ -288,6 +299,14 @@ class MainActivity : Activity() {
         (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
             .hideSoftInputFromWindow(addressBar.windowToken, 0)
         rootLayout.requestFocus()   // focus listener restores the short site name and hides the strip
+    }
+
+    /** Opens what is typed in the bar (address or search) in the current tab. */
+    private fun submitAddress() {
+        val target = toUrl(addressBar.text.toString())
+        currentUrl = target
+        current?.webView?.loadUrl(target)
+        unfocusAddress()
     }
 
     private fun copyAddress() {

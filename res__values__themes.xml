@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Material 3 with wallpaper-based dynamic color and automatic light/dark (minSdk 33 = always available). -->
-    <style name="Theme.MinimalCandy" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar" />
+    <style name="Theme.MinimalCandy" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>
