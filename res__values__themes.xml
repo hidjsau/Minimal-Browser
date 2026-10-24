@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MinimalCandy" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Material 3 with wallpaper-based dynamic color and automatic light/dark (minSdk 33 = always available). -->
+    <style name="Theme.MinimalCandy" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar" />
 </resources>

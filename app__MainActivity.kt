@@ -38,10 +38,19 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
+import android.content.res.ColorStateList
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.InsetDrawable
+import android.util.TypedValue
+import android.widget.ImageView
+import com.google.android.material.R as MR
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.LinearProgressIndicator
 
 /** One tab = one WebView, belonging to exactly one profile. */
 private class Tab(val profileId: String) {
@@ -56,7 +65,7 @@ private class Tab(val profileId: String) {
 class MainActivity : Activity() {
 
     private lateinit var addressBar: EditText
-    private lateinit var progressBar: ProgressBar
+    private lateinit var progressBar: LinearProgressIndicator
     private lateinit var topRow: LinearLayout
     private lateinit var tabBtn: TextView
     private lateinit var profileBtn: TextView
@@ -94,6 +103,53 @@ class MainActivity : Activity() {
             if (strokeDp > 0) setStroke(dp(strokeDp), stroke)
         }
 
+    /** Theme color by attribute, so light/dark/dynamic color all work. No hex in UI code. */
+    private fun col(attr: Int) = MaterialColors.getColor(this, attr, Color.TRANSPARENT)
+
+    /** colorPrimary is defined by AppCompat, so look it up by name (keeps the build independent of R-class layout). */
+    private fun primaryColor() =
+        col(resources.getIdentifier("colorPrimary", "attr", packageName))
+
+    private fun ripple(borderless: Boolean = true): Drawable? {
+        val tv = TypedValue()
+        theme.resolveAttribute(
+            if (borderless) android.R.attr.selectableItemBackgroundBorderless
+            else android.R.attr.selectableItemBackground, tv, true
+        )
+        return if (tv.resourceId != 0) getDrawable(tv.resourceId) else null
+    }
+
+    /** 48 dp icon button (touch target) with a ripple. */
+    private fun iconButton(icon: Int, desc: String, onClick: (View) -> Unit) = ImageView(this).apply {
+        setImageResource(icon)
+        imageTintList = ColorStateList.valueOf(col(MR.attr.colorOnSurfaceVariant))
+        scaleType = ImageView.ScaleType.CENTER
+        contentDescription = desc
+        foreground = ripple()
+        setOnClickListener { onClick(it) }
+    }
+
+    /** Rounded surface popup (menu / profile list). */
+    private fun popupOf(box: LinearLayout, widthDp: Int): PopupWindow {
+        val scroll = ScrollView(this).apply { addView(box) }
+        val w = dp(widthDp)
+        box.measure(
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val h = minOf(box.measuredHeight + dp(4), (resources.displayMetrics.heightPixels * 0.6).toInt())
+        return PopupWindow(scroll, w, h, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(shape(col(MR.attr.colorSurfaceContainerHigh), radiusDp = 16))
+            elevation = dp(8).toFloat()
+        }
+    }
+
+    private fun webViewInfo(): String {
+        val pkg = WebView.getCurrentWebViewPackage()
+        return if (pkg != null) "System WebView: ${pkg.packageName} ${pkg.versionName}" else "System WebView: not found"
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,7 +158,7 @@ class MainActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(col(MR.attr.colorSurface))
         }
         // targetSdk 36 draws edge-to-edge, so keep content clear of system bars and keyboard.
         root.setOnApplyWindowInsetsListener { v, insets ->
@@ -118,6 +174,7 @@ class MainActivity : Activity() {
                 text = "This phone's Android System WebView does not support separate profiles.\n\n" +
                     "Update \"Android System WebView\" (or Chrome) from the Play Store and open the app again."
                 textSize = 16f
+                setTextColor(col(MR.attr.colorOnSurface))
                 setPadding(dp(24), dp(48), dp(24), dp(24))
             })
             return
@@ -129,9 +186,15 @@ class MainActivity : Activity() {
         addressBar = EditText(this).apply {
             setSingleLine(true)
             hint = "Search or enter address"
+            setTextAppearance(MR.style.TextAppearance_Material3_BodyLarge)
+            setTextColor(col(MR.attr.colorOnSurface))
+            setHintTextColor(col(MR.attr.colorOnSurfaceVariant))
+            background = shape(col(MR.attr.colorSurfaceContainerHigh), radiusDp = FULL)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            setSelectAllOnFocus(true)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
-            setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnEditorActionListener { v, actionId, event ->
                 val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
                 if (actionId == EditorInfo.IME_ACTION_GO || enter) {
@@ -142,37 +205,38 @@ class MainActivity : Activity() {
             }
         }
         tabBtn = TextView(this).apply {
-            textSize = 14f
+            setTextAppearance(MR.style.TextAppearance_Material3_LabelLarge)
             gravity = Gravity.CENTER
-            setTextColor(0xFF1B1B1B.toInt())
-            background = shape(Color.WHITE, 0xFF8A8A8A.toInt(), 1, 8)
+            setTextColor(col(MR.attr.colorOnSurface))
+            // 26 dp outlined square drawn inside a 48 dp touch target
+            background = InsetDrawable(shape(Color.TRANSPARENT, col(MR.attr.colorOnSurfaceVariant), 2, 8), dp(11))
+            foreground = ripple()
+            contentDescription = "Tabs"
             setOnClickListener {
                 if (gridScroll.visibility == View.VISIBLE) gridScroll.visibility = View.GONE else openGrid()
             }
         }
         profileBtn = TextView(this).apply {
-            textSize = 22f
+            textSize = 20f
             gravity = Gravity.CENTER
+            background = InsetDrawable(shape(col(MR.attr.colorSurfaceContainerHigh), radiusDp = FULL), dp(6))
+            foreground = ripple()
+            contentDescription = "Profiles"
             setOnClickListener { showProfileList() }
         }
-        val menuBtn = TextView(this).apply {
-            text = "⋮"
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(0xFF1B1B1B.toInt())
-            setOnClickListener { showMenu(this) }
-        }
+        val menuBtn = iconButton(R.drawable.ic_more_vert, "More options") { showMenu(it) }
         topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(tabBtn, LinearLayout.LayoutParams(dp(44), dp(32)).apply { marginStart = dp(4) })
-            addView(profileBtn, LinearLayout.LayoutParams(dp(44), dp(48)))
-            addView(menuBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
+            setPadding(dp(12), dp(6), dp(4), dp(6))
+            addView(addressBar, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(4) })
+            addView(tabBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(profileBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(menuBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
         }
 
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
+        progressBar = LinearProgressIndicator(this).apply {
+            trackThickness = dp(3)
             visibility = View.GONE
         }
 
@@ -182,7 +246,7 @@ class MainActivity : Activity() {
             setPadding(dp(6), dp(6), dp(6), dp(6))
         }
         gridScroll = ScrollView(this).apply {
-            setBackgroundColor(0xFFF6F6F4.toInt())
+            setBackgroundColor(col(MR.attr.colorSurfaceContainerLow))
             visibility = View.GONE
             addView(gridBox)
         }
@@ -191,19 +255,9 @@ class MainActivity : Activity() {
             addView(gridScroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
 
-        val status = TextView(this).apply {
-            textSize = 11f
-            setTextColor(Color.GRAY)
-            setPadding(dp(12), dp(4), dp(12), dp(4))
-            val pkg = WebView.getCurrentWebViewPackage()
-            text = if (pkg != null) "System WebView: ${pkg.packageName} ${pkg.versionName}"
-            else "System WebView: not found"
-        }
-
         root.addView(topRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
+        root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         onBackInvokedDispatcher.registerOnBackInvokedCallback(
             OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback
@@ -242,10 +296,11 @@ class MainActivity : Activity() {
         lateinit var popup: PopupWindow
         for (p in profiles.profiles) {
             val isActive = p.id == profiles.activeId
+            val fg = col(if (isActive) MR.attr.colorOnSecondaryContainer else MR.attr.colorOnSurface)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = shape(if (isActive) 0xFFB7F0BE.toInt() else Color.TRANSPARENT, radiusDp = 10)
+                background = shape(if (isActive) col(MR.attr.colorSecondaryContainer) else Color.TRANSPARENT, radiusDp = 8)
                 setOnClickListener {
                     popup.dismiss()
                     if (p.id != profiles.activeId) showProfile(p.id)
@@ -255,40 +310,28 @@ class MainActivity : Activity() {
             row.addView(TextView(this).apply { text = p.emoji; textSize = 22f; gravity = Gravity.CENTER },
                 LinearLayout.LayoutParams(dp(44), dp(48)))
             row.addView(TextView(this).apply {
-                text = p.name; textSize = 16f; setSingleLine(true); ellipsize = TextUtils.TruncateAt.END
-                setTextColor(0xFF1B1B1B.toInt())
+                text = p.name; setSingleLine(true); ellipsize = TextUtils.TruncateAt.END
+                setTextAppearance(MR.style.TextAppearance_Material3_BodyLarge)
+                setTextColor(fg)
                 if (isActive) setTypeface(typeface, android.graphics.Typeface.BOLD)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(TextView(this).apply {
-                text = "⋮"; textSize = 20f; gravity = Gravity.CENTER
-                setTextColor(0xFF1B1B1B.toInt())
-                setOnClickListener { popup.dismiss(); profileActions(p) }
-            }, LinearLayout.LayoutParams(dp(40), dp(48)))
+            row.addView(iconButton(R.drawable.ic_more_vert, "Profile options") { popup.dismiss(); profileActions(p) },
+                LinearLayout.LayoutParams(dp(48), dp(48)))
             box.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         box.addView(TextView(this).apply {
-            text = "＋  Add profile"; textSize = 16f
-            setTextColor(0xFF1B1B1B.toInt())
+            text = "Add profile"
+            setTextAppearance(MR.style.TextAppearance_Material3_BodyLarge)
+            setTextColor(col(MR.attr.colorOnSurface))
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), 0, dp(14), 0)
+            setPadding(dp(10), 0, dp(14), 0)
+            compoundDrawablePadding = dp(16)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_add, 0, 0, 0)
+            compoundDrawableTintList = ColorStateList.valueOf(col(MR.attr.colorOnSurfaceVariant))
             setOnClickListener { popup.dismiss(); addProfileDialog() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
 
-        val scroll = ScrollView(this).apply {
-            background = shape(Color.WHITE, 0xFFCCCCCC.toInt(), 1, 14)
-            addView(box)
-        }
-        val w = dp(260)
-        box.measure(
-            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
-        val h = minOf(box.measuredHeight + dp(4), (resources.displayMetrics.heightPixels * 0.6).toInt())
-        popup = PopupWindow(scroll, w, h, true).apply {
-            isOutsideTouchable = true
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            elevation = dp(8).toFloat()
-        }
+        popup = popupOf(box, 260)
         profilePopup = popup
         popup.showAsDropDown(topRow, 0, 0, Gravity.END)
     }
@@ -296,7 +339,7 @@ class MainActivity : Activity() {
     private fun nameDialog(title: String, initial: String, onOk: (String) -> Unit) {
         val input = EditText(this).apply { setSingleLine(true); setText(initial); setSelection(length()) }
         val box = FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input) }
-        val d = android.app.AlertDialog.Builder(this)
+        val d = MaterialAlertDialogBuilder(this)
             .setTitle(title).setView(box)
             .setPositiveButton("OK") { _, _ ->
                 val n = input.text.toString().trim()
@@ -320,7 +363,7 @@ class MainActivity : Activity() {
     }
 
     private fun profileActions(p: Profile) {
-        android.app.AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("${p.emoji}  ${p.name}")
             .setItems(arrayOf("Rename", "Change emoji", "Delete")) { _, which ->
                 when (which) {
@@ -332,7 +375,7 @@ class MainActivity : Activity() {
     }
 
     private fun emojiDialog(p: Profile) {
-        lateinit var dialog: android.app.AlertDialog
+        lateinit var dialog: androidx.appcompat.app.AlertDialog
         val grid = GridLayout(this).apply {
             columnCount = 6
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -347,7 +390,7 @@ class MainActivity : Activity() {
                 }
             }, GridLayout.LayoutParams().apply { width = dp(48); height = dp(48) })
         }
-        dialog = android.app.AlertDialog.Builder(this)
+        dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Change emoji").setView(grid)
             .setNegativeButton("Cancel", null).create()
         dialog.show()
@@ -355,7 +398,7 @@ class MainActivity : Activity() {
 
     private fun confirmDelete(p: Profile) {
         if (profiles.profiles.size <= 1) { downloader.toast("Keep at least one profile"); return }
-        android.app.AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Delete \"${p.name}\"?")
             .setMessage("Its tabs, logins and site data will be erased. Other profiles are not touched.")
             .setPositiveButton("Delete") { _, _ -> deleteProfile(p) }
@@ -436,7 +479,7 @@ class MainActivity : Activity() {
 
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
                     if (tab !== current) return
-                    progressBar.progress = newProgress
+                    progressBar.setProgressCompat(newProgress, true)
                     progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
                 }
             }
@@ -487,7 +530,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateTabButton() {
-        tabBtn.text = "▢ ${tabs.count { it.profileId == profiles.activeId }}"
+        tabBtn.text = tabs.count { it.profileId == profiles.activeId }.toString()
     }
 
     private fun openGrid() {
@@ -509,53 +552,79 @@ class MainActivity : Activity() {
 
     private fun tabCard(tab: Tab): View {
         val sel = tab === current
-        val label = tab.title.ifBlank {
-            runCatching { Uri.parse(tab.webView.url).host }.getOrNull() ?: "New tab"
-        }
+        val host = runCatching { Uri.parse(tab.webView.url).host }.getOrNull()
+        val label = tab.title.ifBlank { host ?: "New tab" }
         return FrameLayout(this).apply {
-            background = shape(Color.WHITE, if (sel) 0xFF2E9E4F.toInt() else 0xFFCCCCCC.toInt(), if (sel) 2 else 1)
+            background = shape(
+                col(MR.attr.colorSurfaceContainerHigh),
+                primaryColor(),
+                if (sel) 2 else 0, 16,
+            )
+            clipToOutline = true
+            foreground = ripple(borderless = false)
             setOnClickListener { selectTab(tab) }
-            addView(TextView(context).apply {
-                text = label
-                textSize = 14f
-                maxLines = 3
-                ellipsize = TextUtils.TruncateAt.END
-                setTextColor(0xFF1B1B1B.toInt())
-                setPadding(dp(12), dp(12), dp(44), dp(12))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(14), dp(48), dp(12))
+                addView(TextView(context).apply {
+                    text = label
+                    setTextAppearance(MR.style.TextAppearance_Material3_TitleSmall)
+                    setTextColor(col(MR.attr.colorOnSurface))
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+                if (tab.title.isNotBlank() && host != null) {
+                    addView(TextView(context).apply {
+                        text = host
+                        setTextAppearance(MR.style.TextAppearance_Material3_LabelMedium)
+                        setTextColor(col(MR.attr.colorOnSurfaceVariant))
+                        maxLines = 1
+                        ellipsize = TextUtils.TruncateAt.END
+                        setPadding(0, dp(4), 0, 0)
+                    })
+                }
             }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(TextView(context).apply {
-                text = "✕"
-                textSize = 16f
-                gravity = Gravity.CENTER
-                setTextColor(0xFF1B1B1B.toInt())
-                setOnClickListener { closeTab(tab) }
-            }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.END))
+            addView(iconButton(R.drawable.ic_close, "Close tab") { closeTab(tab) },
+                FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.END))
         }
     }
 
-    private fun plusCard(): View = TextView(this).apply {
-        text = "+"
-        textSize = 34f
-        gravity = Gravity.CENTER
-        setTextColor(0xFF1B1B1B.toInt())
-        background = shape(0xFFE6E9E0.toInt(), radiusDp = 12)
+    private fun plusCard(): View = ImageView(this).apply {
+        setImageResource(R.drawable.ic_add)
+        imageTintList = ColorStateList.valueOf(col(MR.attr.colorOnSurfaceVariant))
+        scaleType = ImageView.ScaleType.CENTER
+        contentDescription = "New tab"
+        background = shape(col(MR.attr.colorSurfaceContainerHighest), radiusDp = 16)
+        clipToOutline = true
+        foreground = ripple(borderless = false)
         setOnClickListener { selectTab(newTab(profiles.active(), HOME)) }
     }
 
     private fun showMenu(anchor: View) {
-        PopupMenu(this, anchor).apply {
-            menu.add(0, 1, 0, "Forward")
-            menu.add(0, 2, 1, "Reload")
-            setOnMenuItemClickListener {
-                val w = current?.webView
-                when (it.itemId) {
-                    1 -> if (w?.canGoForward() == true) w.goForward()
-                    2 -> w?.reload()
-                }
-                true
-            }
-            show()
+        lateinit var popup: PopupWindow
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
+        fun item(label: String, action: () -> Unit) {
+            box.addView(TextView(this).apply {
+                text = label
+                setTextAppearance(MR.style.TextAppearance_Material3_BodyLarge)
+                setTextColor(col(MR.attr.colorOnSurface))
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), 0, dp(16), 0)
+                foreground = ripple(borderless = false)
+                setOnClickListener { popup.dismiss(); action() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
+        }
+        item("Forward") {
+            val w = current?.webView
+            if (w?.canGoForward() == true) w.goForward()
+        }
+        item("Reload") { current?.webView?.reload() }
+        item("WebView info") { downloader.toast(webViewInfo()) }
+        popup = popupOf(box, 200)
+        popup.showAsDropDown(anchor, 0, 0, Gravity.END)
     }
 
     /** Every download: get the bytes (blob/data are fetched right away), then ask for a folder. */
@@ -655,7 +724,7 @@ class MainActivity : Activity() {
         nameField.setOnFocusChangeListener { _, f -> if (f) active = nameField }
         extField.setOnFocusChangeListener { _, f -> if (f) active = extField }
 
-        fun tool(label: String, action: () -> Unit) = android.widget.Button(this).apply {
+        fun tool(label: String, action: () -> Unit) = MaterialButton(this, null, MR.attr.materialButtonOutlinedStyle).apply {
             text = label; isAllCaps = false; isFocusable = false; isFocusableInTouchMode = false
             setOnClickListener { action() }
         }
@@ -680,7 +749,7 @@ class MainActivity : Activity() {
         }
 
         var confirmed = false
-        val dialog = android.app.AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Save file as")
             .setView(box)
             .setPositiveButton("Download") { _, _ ->
@@ -747,6 +816,7 @@ class MainActivity : Activity() {
         const val REQ_FOLDER = 1
         const val REQ_NOTIFY = 2
         const val REQ_UPLOAD = 3
+        const val FULL = 999 // pill / fully rounded corner
         const val HOME = "https://www.google.com"
         const val Profile_DEFAULT = "Default"
         /** Remembers download="name" of page-generated (blob) links, even if the link is removed later. */
