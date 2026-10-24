@@ -1,24 +1,25 @@
 package dev.sk2andy.materialbrowser
 
+import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.text.format.Formatter
-import android.webkit.MimeTypeMap
 import android.net.Uri
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
-import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.widget.Toast
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Step 8 (minimal): download a URL into a folder the user picked, with a progress notification. */
-class Downloader(context: Context, private val accent: Int = 0) {
+/** Downloads a URL straight into the public Downloads folder (no folder picker), with a progress notification. */
+class Downloader(context: Context) {
 
     class Request(
         val url: String,
@@ -37,25 +38,27 @@ class Downloader(context: Context, private val accent: Int = 0) {
     private val main = Handler(Looper.getMainLooper())
     private val ids = AtomicInteger(1000)
 
+    /**
+     * Progress feedback for the UI, always called on the main thread.
+     * pct: 0..100, or -1 when unknown. done = this download has ended; failed = it ended with an error.
+     */
+    var listener: ((id: Int, pct: Int, done: Boolean, failed: Boolean) -> Unit)? = null
+
     init {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW)
         )
     }
 
-    /** [tree] is the folder returned by ACTION_OPEN_DOCUMENT_TREE. */
-    fun start(req: Request, tree: Uri) {
+    fun start(req: Request) {
         val id = ids.incrementAndGet()
-        post(id, req.fileName, "Starting…", folderLabel(tree), progress = -1)
-        Thread { run(id, req, tree) }.start()
+        post(id, req.fileName, "Starting…", progress = -1)
+        Thread { run(id, req) }.start()
     }
 
-    private fun run(id: Int, req: Request, tree: Uri) {
+    private fun run(id: Int, req: Request) {
         var target: Uri? = null
         try {
-            val parent = DocumentsContract.buildDocumentUriUsingTree(
-                tree, DocumentsContract.getTreeDocumentId(tree)
-            )
             val input: java.io.InputStream
             val total: Long
             var finalName = req.fileName
@@ -82,15 +85,18 @@ class Downloader(context: Context, private val accent: Int = 0) {
                 input = conn.inputStream
                 total = conn.contentLengthLong
             }
-            finalName = uniqueName(tree, finalName)
-            // octet-stream keeps the exact name; the folder provider adds " (1)" if the name exists.
-            target = DocumentsContract.createDocument(
-                app.contentResolver, parent, "application/octet-stream", finalName
-            ) ?: error("Could not create file in folder")
+            finalName = uniqueName(finalName)
+            // octet-stream keeps the exact name (MediaStore does not append an extension to it).
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, finalName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            target = app.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Could not create file in Downloads")
             var done = 0L
             var lastPct = -1
-            var lastBytes = 0L
-            val where = folderLabel(tree)
 
             input.use { input ->
                 app.contentResolver.openOutputStream(target, "w")!!.use { out ->
@@ -104,59 +110,54 @@ class Downloader(context: Context, private val accent: Int = 0) {
                             val pct = (done * 100 / total).toInt()
                             if (pct != lastPct) {
                                 lastPct = pct
-                                post(id, req.fileName, "$pct%  ·  ${size(done)} of ${size(total)}", where, progress = pct)
+                                post(id, req.fileName, "$pct%", progress = pct)
                             }
-                        } else if (done - lastBytes >= 512 * 1024) {
-                            lastBytes = done
-                            post(id, req.fileName, "${size(done)} downloaded", where, progress = -1)
                         }
                     }
                 }
             }
-            post(id, finalName, "Download complete  ·  ${size(done)}  ·  Tap to open", where, done = true, openUri = target, name = finalName)
+            // Publish the file: it becomes visible in the Files app / Downloads only now.
+            app.contentResolver.update(
+                target, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null
+            )
+            post(id, finalName, "Saved to Downloads", done = true)
         } catch (e: Exception) {
-            target?.let { runCatching { DocumentsContract.deleteDocument(app.contentResolver, it) } }
-            post(id, req.fileName, "Download failed: ${e.message ?: "error"}", folderLabel(tree), done = true, failed = true)
+            target?.let { runCatching { app.contentResolver.delete(it, null, null) } }
+            post(id, req.fileName, "Download failed: ${e.message ?: "error"}", done = true, failed = true)
         } finally {
             req.localFile?.delete()
         }
     }
 
     /** "xyz.mp4" exists -> "xyz(1).mp4": the number goes before the last dot, never after the extension. */
-    private fun uniqueName(tree: Uri, name: String): String {
-        val existing = HashSet<String>()
-        runCatching {
-            val kids = DocumentsContract.buildChildDocumentsUriUsingTree(
-                tree, DocumentsContract.getTreeDocumentId(tree)
-            )
+    private fun uniqueName(name: String): String {
+        fun exists(n: String): Boolean = runCatching {
             app.contentResolver.query(
-                kids, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null
-            )?.use { c -> while (c.moveToNext()) c.getString(0)?.let { existing.add(it) } }
-        }
-        if (name !in existing) return name
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Downloads._ID),
+                "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?",
+                arrayOf(n, Environment.DIRECTORY_DOWNLOADS + "/"),
+                null,
+            )?.use { it.count > 0 } ?: false
+        }.getOrDefault(false)
+        if (!exists(name)) return name
         val dot = name.lastIndexOf('.')
         val base = if (dot > 0) name.substring(0, dot) else name
         val ext = if (dot > 0) name.substring(dot) else ""
         var i = 1
-        while ("$base($i)$ext" in existing) i++
+        while (exists("$base($i)$ext")) i++
         return "$base($i)$ext"
     }
 
-    private fun size(bytes: Long) = Formatter.formatShortFileSize(app, bytes)
-
     /** progress: 0..100, or -1 for indeterminate. done = final state (not ongoing). */
     private fun post(
-        id: Int, title: String, text: String, folder: String?,
+        id: Int, title: String, text: String,
         progress: Int = -1, done: Boolean = false, failed: Boolean = false,
-        openUri: Uri? = null, name: String = title,
     ) {
         val b = Notification.Builder(app, CHANNEL)
             .setContentTitle(title)
             .setContentText(text)
-            .setStyle(Notification.BigTextStyle().bigText(text))
             .setOnlyAlertOnce(true)
-            .setShowWhen(false)
-            .setCategory(if (done) Notification.CATEGORY_STATUS else Notification.CATEGORY_PROGRESS)
             .setSmallIcon(
                 when {
                     failed -> android.R.drawable.stat_notify_error
@@ -164,40 +165,25 @@ class Downloader(context: Context, private val accent: Int = 0) {
                     else -> android.R.drawable.stat_sys_download
                 }
             )
-        if (accent != 0) b.setColor(accent)
-        if (folder != null) b.setSubText(folder)
         if (done) {
             b.setOngoing(false).setAutoCancel(true)
-            if (openUri != null && !failed) openIntent(id, openUri, name)?.let { b.setContentIntent(it) }
-        } else {
-            b.setOngoing(true).setProgress(100, progress.coerceAtLeast(0), progress < 0)
-        }
+            if (!failed) {
+                // Tapping the finished notification opens the system Downloads list.
+                b.setContentIntent(
+                    PendingIntent.getActivity(
+                        app, id, Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                )
+            }
+        } else b.setOngoing(true).setProgress(100, progress.coerceAtLeast(0), progress < 0)
         nm.notify(id, b.build())
+        main.post { listener?.invoke(id, if (done) 100 else progress, done, failed) }
     }
-
-    /** Tapping a finished download opens it with whatever app handles that file type. */
-    private fun openIntent(id: Int, uri: Uri, name: String): PendingIntent? = runCatching {
-        val ext = name.substringAfterLast('.', "").lowercase()
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
-        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        PendingIntent.getActivity(app, id, view, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-    }.getOrNull()
 
     fun toast(msg: String) = main.post { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() }
 
-    companion object {
-        private const val CHANNEL = "downloads"
-
-        /** Readable path of a picked folder, e.g. "Internal storage/Download/Reports". */
-        fun folderLabel(tree: Uri): String {
-            val id = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull()
-                ?: return tree.lastPathSegment ?: "Selected folder"
-            if (!id.contains(':')) return Uri.decode(id)
-            val volume = id.substringBefore(':')
-            val path = id.substringAfter(':').trim('/')
-            val root = if (volume.equals("primary", ignoreCase = true)) "Internal storage" else "SD card"
-            return if (path.isEmpty()) root else "$root/$path"
-        }
+    private companion object {
+        const val CHANNEL = "downloads"
     }
 }
