@@ -3,7 +3,11 @@ package dev.sk2andy.materialbrowser
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.text.format.Formatter
+import android.webkit.MimeTypeMap
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -14,7 +18,7 @@ import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Step 8 (minimal): download a URL into a folder the user picked, with a progress notification. */
-class Downloader(context: Context) {
+class Downloader(context: Context, private val accent: Int = 0) {
 
     class Request(
         val url: String,
@@ -42,7 +46,7 @@ class Downloader(context: Context) {
     /** [tree] is the folder returned by ACTION_OPEN_DOCUMENT_TREE. */
     fun start(req: Request, tree: Uri) {
         val id = ids.incrementAndGet()
-        post(id, req.fileName, "Starting…", progress = -1)
+        post(id, req.fileName, "Starting…", folderLabel(tree), progress = -1)
         Thread { run(id, req, tree) }.start()
     }
 
@@ -85,6 +89,8 @@ class Downloader(context: Context) {
             ) ?: error("Could not create file in folder")
             var done = 0L
             var lastPct = -1
+            var lastBytes = 0L
+            val where = folderLabel(tree)
 
             input.use { input ->
                 app.contentResolver.openOutputStream(target, "w")!!.use { out ->
@@ -98,16 +104,19 @@ class Downloader(context: Context) {
                             val pct = (done * 100 / total).toInt()
                             if (pct != lastPct) {
                                 lastPct = pct
-                                post(id, req.fileName, "$pct%", progress = pct)
+                                post(id, req.fileName, "$pct%  ·  ${size(done)} of ${size(total)}", where, progress = pct)
                             }
+                        } else if (done - lastBytes >= 512 * 1024) {
+                            lastBytes = done
+                            post(id, req.fileName, "${size(done)} downloaded", where, progress = -1)
                         }
                     }
                 }
             }
-            post(id, finalName, "Download complete", done = true)
+            post(id, finalName, "Download complete  ·  ${size(done)}  ·  Tap to open", where, done = true, openUri = target, name = finalName)
         } catch (e: Exception) {
             target?.let { runCatching { DocumentsContract.deleteDocument(app.contentResolver, it) } }
-            post(id, req.fileName, "Download failed: ${e.message ?: "error"}", done = true, failed = true)
+            post(id, req.fileName, "Download failed: ${e.message ?: "error"}", folderLabel(tree), done = true, failed = true)
         } finally {
             req.localFile?.delete()
         }
@@ -133,15 +142,21 @@ class Downloader(context: Context) {
         return "$base($i)$ext"
     }
 
+    private fun size(bytes: Long) = Formatter.formatShortFileSize(app, bytes)
+
     /** progress: 0..100, or -1 for indeterminate. done = final state (not ongoing). */
     private fun post(
-        id: Int, title: String, text: String,
+        id: Int, title: String, text: String, folder: String?,
         progress: Int = -1, done: Boolean = false, failed: Boolean = false,
+        openUri: Uri? = null, name: String = title,
     ) {
         val b = Notification.Builder(app, CHANNEL)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setCategory(if (done) Notification.CATEGORY_STATUS else Notification.CATEGORY_PROGRESS)
             .setSmallIcon(
                 when {
                     failed -> android.R.drawable.stat_notify_error
@@ -149,14 +164,40 @@ class Downloader(context: Context) {
                     else -> android.R.drawable.stat_sys_download
                 }
             )
-        if (done) b.setOngoing(false).setAutoCancel(true)
-        else b.setOngoing(true).setProgress(100, progress.coerceAtLeast(0), progress < 0)
+        if (accent != 0) b.setColor(accent)
+        if (folder != null) b.setSubText(folder)
+        if (done) {
+            b.setOngoing(false).setAutoCancel(true)
+            if (openUri != null && !failed) openIntent(id, openUri, name)?.let { b.setContentIntent(it) }
+        } else {
+            b.setOngoing(true).setProgress(100, progress.coerceAtLeast(0), progress < 0)
+        }
         nm.notify(id, b.build())
     }
 
+    /** Tapping a finished download opens it with whatever app handles that file type. */
+    private fun openIntent(id: Int, uri: Uri, name: String): PendingIntent? = runCatching {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        PendingIntent.getActivity(app, id, view, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }.getOrNull()
+
     fun toast(msg: String) = main.post { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() }
 
-    private companion object {
-        const val CHANNEL = "downloads"
+    companion object {
+        private const val CHANNEL = "downloads"
+
+        /** Readable path of a picked folder, e.g. "Internal storage/Download/Reports". */
+        fun folderLabel(tree: Uri): String {
+            val id = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull()
+                ?: return tree.lastPathSegment ?: "Selected folder"
+            if (!id.contains(':')) return Uri.decode(id)
+            val volume = id.substringBefore(':')
+            val path = id.substringAfter(':').trim('/')
+            val root = if (volume.equals("primary", ignoreCase = true)) "Internal storage" else "SD card"
+            return if (path.isEmpty()) root else "$root/$path"
+        }
     }
 }

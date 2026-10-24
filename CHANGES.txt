@@ -1,0 +1,17 @@
+Candy Min browser - UI update (all patches combined)
+
+Upload every file in this zip to the ROOT of your GitHub repo (the .github folder too),
+overwriting the old ones, then run Actions > "Build APK".
+
+Changed:  app__MainActivity.kt, app__Downloader.kt, app__build.gradle.kts, res__values__themes.xml
+New:      res__drawable__ic_refresh.xml, ic_download.xml, ic_folder.xml
+Updated:  res__drawable__ic_more_vert.xml, ic_close.xml, ic_add.xml
+
+What is in it
+- Material 3 theme (dynamic color, light/dark) + material library dependency
+- Slim address bar and icons, reload/stop button next to the tab button
+- Redesigned tab cards, menu, profile list and dialogs
+- Save-file dialog with folder path, "Change" folder, remembered last folder,
+  and auto-download switch (also in the menu)
+- Richer download notification (folder, size, tap to open)
+- Text size control (menu > Text size): slider + exact percent box, saved per website
