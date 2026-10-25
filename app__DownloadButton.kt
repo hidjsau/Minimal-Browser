@@ -33,7 +33,8 @@ class DownloadButton(context: Context) : View(context) {
         color = role(M.attr.colorOnSurfaceVariant)
     }
     private val circle = Path()
-    private val arrow = Path()
+    private val icon = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_download)?.mutate()
+        ?.also { it.setTint(role(M.attr.colorOnSurface)) }
 
     private var mode = Mode.IDLE
     private var level = 0f          // 0..1, how much of the circle is filled
@@ -145,12 +146,8 @@ class DownloadButton(context: Context) : View(context) {
             canvas.restoreToCount(save)
         }
 
-        arrow.reset()
-        arrow.moveTo(cx, cy - 5f * d)
-        arrow.lineTo(cx, cy + 4f * d)
-        arrow.moveTo(cx - 3.8f * d, cy + 0.2f * d)
-        arrow.lineTo(cx, cy + 4f * d)
-        arrow.lineTo(cx + 3.8f * d, cy + 0.2f * d)
-        canvas.drawPath(arrow, arrowPaint)
+        val half = (11f * d).toInt()
+        icon?.setBounds(cx.toInt() - half, cy.toInt() - half, cx.toInt() + half, cy.toInt() + half)
+        icon?.draw(canvas)
     }
 }

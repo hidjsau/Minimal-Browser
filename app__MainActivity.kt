@@ -164,6 +164,9 @@ class MainActivity : AppCompatActivity() {
             shape(Color.BLACK, radiusDp = 24),
         )
 
+    /** One color for the status bar and the top bar. Change it here to restyle both. */
+    private fun barColor(): Int = c(M.attr.colorSurfaceContainerHigh)
+
     private fun pillBg(focused: Boolean): Drawable =
         shape(
             c(M.attr.colorSurfaceContainerHigh),
@@ -208,7 +211,7 @@ class MainActivity : AppCompatActivity() {
         val surface = c(M.attr.colorSurface)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(surface)
+            setBackgroundColor(barColor())   // shows behind the status bar, so bar + status bar match
             isFocusableInTouchMode = true   // lets us take focus away from the address bar
         }
         rootLayout = root
@@ -225,7 +228,7 @@ class MainActivity : AppCompatActivity() {
         val barMask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
             android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
         window.insetsController?.setSystemBarsAppearance(
-            if (MaterialColors.isColorLight(surface)) barMask else 0, barMask,
+            if (MaterialColors.isColorLight(barColor())) barMask else 0, barMask,
         )
 
         // Every profile needs its own storage. Never fall back to shared storage.
@@ -251,8 +254,9 @@ class MainActivity : AppCompatActivity() {
             setTextAppearance(M.style.TextAppearance_Material3_BodyLarge)
             setTextColor(c(M.attr.colorOnSurface))
             setHintTextColor(c(M.attr.colorOnSurfaceVariant))
-            background = null                                      // the pill around it draws the field
-            setPadding(dp(4), 0, dp(4), 0)
+            background = null                                      // plain text, no pill
+            textSize = 15f
+            setPadding(dp(6), 0, dp(6), 0)
             setOnEditorActionListener { v, actionId, event ->
                 val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
                 if (actionId == EditorInfo.IME_ACTION_GO || enter) {
@@ -263,7 +267,6 @@ class MainActivity : AppCompatActivity() {
             // Tapped: show the full address (selected, ready to replace) and the Copy/Delete/Paste strip.
             setOnFocusChangeListener { v, focused ->
                 setEditMode(focused)
-                addressPill.background = pillBg(focused)
                 if (focused) {
                     setText(currentUrl)
                     post { selectAll() }
@@ -276,8 +279,12 @@ class MainActivity : AppCompatActivity() {
             setTextAppearance(M.style.TextAppearance_Material3_LabelLarge)
             gravity = Gravity.CENTER
             setTextColor(c(M.attr.colorOnSurface))
-            // 26 dp rounded outline inside a 40x48 touch area, tab count inside
-            background = InsetDrawable(shape(Color.TRANSPARENT, c(M.attr.colorOnSurfaceVariant), 2, 8), dp(7), dp(11), dp(7), dp(11))
+            // Fluent tab icon (vector) inside a 40x48 touch area, tab count inside
+            textSize = 11f
+            background = InsetDrawable(
+                androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_tab)!!.mutate()
+                    .also { it.setTint(c(M.attr.colorOnSurface)) },
+                dp(7), dp(11), dp(7), dp(11))
             foreground = circleRipple()
             contentDescription = "Tabs"
             setOnClickListener {
@@ -333,17 +340,14 @@ class MainActivity : AppCompatActivity() {
             addView(editIcon(R.drawable.ic_content_cut, "Cut") { cutAddress() }, lp())
             addView(editIcon(R.drawable.ic_delete, "Delete") { addressBar.setText("") }, lp())
             addView(editIcon(R.drawable.ic_select_all, "Select all") { addressBar.selectAll() }, lp())
-            addView(editIcon(R.drawable.ic_arrow_forward, "Go", c(androidx.appcompat.R.attr.colorPrimary)) { submitAddress() }, lp())
+            addView(editIcon(R.drawable.ic_go, "Go", c(androidx.appcompat.R.attr.colorPrimary)) { submitAddress() }, lp())
             addView(editIcon(R.drawable.ic_close, "Cancel") { unfocusAddress() }, lp())
         }
-        // [ tabs | address | reload | edit icons ] in one search-style pill
+        // plain address text (no pill) + the edit icons, shown while the address is being edited
         addressPill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = pillBg(false)
-            addView(tabBtn, LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-            addView(reloadBtn, LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(editStrip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         backBtn = iconView(R.drawable.ic_arrow_back, padH = 6).apply {
@@ -354,20 +358,25 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "Forward"
             setOnClickListener { unfocusAddress(); current?.webView?.takeIf { it.canGoForward() }?.goForward() }
         }
+        // order: refresh, back, forward, profile, download, menu
         rightGroup = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            addView(reloadBtn, LinearLayout.LayoutParams(dp(38), dp(48)))
             addView(backBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
             addView(fwdBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
             addView(profileBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
             addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
             addView(menuBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
         }
+        // [ tab ] address text ........ [ refresh back forward profile download menu ]
         topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(6), dp(2), dp(6))
-            addView(addressPill, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(2) })
+            setBackgroundColor(barColor())
+            setPadding(dp(6), dp(4), dp(2), dp(4))
+            addView(tabBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
+            addView(addressPill, LinearLayout.LayoutParams(0, dp(48), 1f))
             addView(rightGroup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
         }
 
@@ -397,6 +406,7 @@ class MainActivity : AppCompatActivity() {
             addView(gridBox)
         }
         val container = FrameLayout(this).apply {
+            setBackgroundColor(surface)
             addView(webHolder, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(gridScroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(gridFab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -469,7 +479,6 @@ class MainActivity : AppCompatActivity() {
         reloadBtn.visibility = other
         rightGroup.visibility = other
         editStrip.visibility = if (on) View.VISIBLE else View.GONE
-        (addressPill.layoutParams as? LinearLayout.LayoutParams)?.marginEnd = if (on) 0 else dp(2)
     }
 
     private fun unfocusAddress() {
