@@ -426,6 +426,51 @@ class MainActivity : AppCompatActivity() {
         )
         WebView.setWebContentsDebuggingEnabled(true) // diagnostics only
         showProfile(profiles.activeId)
+        if (savedInstanceState == null) showSplashOverlay()
+    }
+
+    /**
+     * Branded launch screen, drawn right after the system splash (same cream / berry background and the
+     * same icon frame, so the hand-over is seamless): the icon animates, the app name rises in, a
+     * four-colour line sweeps out, then everything fades away.
+     */
+    private fun showSplashOverlay() {
+        val bg = if (nightMode) 0xFF1F0A14.toInt() else 0xFFFFF4E8.toInt()
+        val ink = if (nightMode) 0xFFFFE3EC.toInt() else 0xFF5A0A2A.toInt()
+        val overlay = FrameLayout(this).apply { setBackgroundColor(bg); isClickable = true }
+
+        val icon = ImageView(this).apply { setImageResource(R.drawable.splash_icon_anim) }
+        overlay.addView(icon, FrameLayout.LayoutParams(dp(240), dp(240), Gravity.CENTER))
+
+        val name = TextView(this).apply {
+            text = getString(R.string.app_name)
+            setTextAppearance(M.style.TextAppearance_Material3_TitleLarge)
+            setTextColor(ink)
+            letterSpacing = 0.12f
+            alpha = 0f
+            translationY = dp(162).toFloat()
+        }
+        overlay.addView(name, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+
+        val line = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(0xFFFFD93B.toInt(), 0xFFFF8A1F.toInt(), 0xFFF0283C.toInt(), 0xFFFF5FA2.toInt()),
+            ).apply { cornerRadius = dp(2).toFloat() }
+            scaleX = 0f
+            translationY = dp(196).toFloat()
+        }
+        overlay.addView(line, FrameLayout.LayoutParams(dp(64), dp(4), Gravity.CENTER))
+
+        addContentView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        (icon.drawable as? android.graphics.drawable.Animatable)?.start()
+        name.animate().alpha(1f).translationY(dp(154).toFloat()).setStartDelay(250).setDuration(350).start()
+        line.animate().scaleX(1f).setStartDelay(400).setDuration(450)
+            .setInterpolator(android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)).start()
+        overlay.animate().alpha(0f).setStartDelay(1100).setDuration(280).withEndAction {
+            (overlay.parent as? ViewGroup)?.removeView(overlay)
+        }.start()
     }
 
     private fun isNight() =
