@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fwdBtn: ImageView
     private lateinit var gridFab: ExtendedFloatingActionButton
     private var nightMode = false
-    private lateinit var topRow: LinearLayout
+    private lateinit var topRow: FrameLayout
     private lateinit var rootLayout: LinearLayout
     private lateinit var editStrip: LinearLayout     // edit icons inside the pill, shown while the address bar has focus
     private lateinit var downloadBtn: DownloadButton
@@ -256,7 +256,7 @@ class MainActivity : AppCompatActivity() {
             setHintTextColor(c(M.attr.colorOnSurfaceVariant))
             background = null                                      // plain text, no pill
             textSize = 15f
-            setPadding(dp(6), 0, dp(6), 0)
+            setPadding(dp(8), 0, dp(8), 0)
             setOnEditorActionListener { v, actionId, event ->
                 val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
                 if (actionId == EditorInfo.IME_ACTION_GO || enter) {
@@ -350,34 +350,38 @@ class MainActivity : AppCompatActivity() {
             addView(addressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
             addView(editStrip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        backBtn = iconView(R.drawable.ic_arrow_back, padH = 6).apply {
+        backBtn = iconView(R.drawable.ic_arrow_back, padH = 8).apply {
             contentDescription = "Back"
             setOnClickListener { unfocusAddress(); current?.webView?.takeIf { it.canGoBack() }?.goBack() }
         }
-        fwdBtn = iconView(R.drawable.ic_arrow_forward, padH = 6).apply {
+        fwdBtn = iconView(R.drawable.ic_arrow_forward, padH = 8).apply {
             contentDescription = "Forward"
             setOnClickListener { unfocusAddress(); current?.webView?.takeIf { it.canGoForward() }?.goForward() }
         }
-        // order: refresh, back, forward, profile, download, menu
+        // order: refresh, back, forward, profile, download, menu. Sits ON TOP of the address text:
+        // a long site name runs behind these buttons, with a short fade at their left edge.
         rightGroup = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(reloadBtn, LinearLayout.LayoutParams(dp(38), dp(48)))
-            addView(backBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
-            addView(fwdBtn, LinearLayout.LayoutParams(dp(36), dp(48)))
+            setPadding(dp(14), 0, dp(4), 0)
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(withAlpha(barColor(), 0), barColor(), barColor())).apply {
+                setColors(intArrayOf(withAlpha(barColor(), 0), barColor(), barColor()), floatArrayOf(0f, 0.06f, 1f))
+            }
+            addView(reloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
+            addView(backBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
+            addView(fwdBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
             addView(profileBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
             addView(downloadBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
             addView(menuBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
         }
-        // [ tab ] address text ........ [ refresh back forward profile download menu ]
-        topRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // [ tab ] address text (runs under the buttons) ........ [ buttons ]
+        topRow = FrameLayout(this).apply {
             setBackgroundColor(barColor())
-            setPadding(dp(6), dp(4), dp(2), dp(4))
-            addView(tabBtn, LinearLayout.LayoutParams(dp(40), dp(48)))
-            addView(addressPill, LinearLayout.LayoutParams(0, dp(48), 1f))
-            addView(rightGroup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            addView(addressPill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { marginStart = dp(44) })
+            addView(tabBtn, FrameLayout.LayoutParams(dp(40), dp(48), Gravity.START))
+            addView(rightGroup, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48), Gravity.END))
         }
 
         progressBar = RgbProgressBar(this).apply { visibility = View.GONE }
@@ -479,6 +483,8 @@ class MainActivity : AppCompatActivity() {
         reloadBtn.visibility = other
         rightGroup.visibility = other
         editStrip.visibility = if (on) View.VISIBLE else View.GONE
+        (addressPill.layoutParams as? FrameLayout.LayoutParams)?.marginStart = if (on) dp(10) else dp(44)
+        addressPill.requestLayout()
     }
 
     private fun unfocusAddress() {
